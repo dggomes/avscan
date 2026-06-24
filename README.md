@@ -66,17 +66,22 @@ On first run (or `scan-av -Configure`) a wizard:
 
 ### The app (GUI)
 
-`-Install` puts a **Scan-AV** shortcut on your desktop that opens a small app:
+`-Install` puts a **Scan-AV** shortcut on your desktop that opens the app:
 
-- a checklist of your configured folders — tick the ones to scan,
+- a **tree of your folders and sub-folders** with checkboxes — expand any folder and
+  tick exactly the sub-folders you want (checking a folder includes all of it; for a
+  subset, untick it and tick the sub-folders). Only the minimal set is scanned.
 - **Scan checked** / **Scan all** (each runs in its own live console window),
 - **Update definitions** on demand,
+- **Update app (GitHub)** — pulls the latest scan-av from GitHub, validates it, and
+  offers to restart,
 - **Add folder...** / **Remove checked**,
 - **Open logs folder** / **View last log**,
-- **Rescan all** and **Verbose** toggles.
+- **Rescan all** and **Verbose** toggles, plus an engines/mode/incremental status line.
 
 ```powershell
-scan-av -Gui     # open the app from the command line too
+scan-av -Gui          # open the app from the command line too
+scan-av -SelfUpdate   # update to the latest GitHub version from the CLI
 ```
 
 Scans launched from the app run in a separate console (with live output) so the

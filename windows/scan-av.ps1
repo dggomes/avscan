@@ -59,6 +59,7 @@ param(
   [string[]]$RemoveFolder,
   [switch]$ListFolders,
   [switch]$Gui,
+  [switch]$SelfUpdate,
   [switch]$Help
 )
 
@@ -589,11 +590,36 @@ function Update-Definitions {
   return $ok
 }
 
+# ---------------------------------------------------------------- self-update
+$RawUrl = 'https://raw.githubusercontent.com/dggomes/avscan/main/windows/scan-av.ps1'
+# Download the latest scan-av.ps1 from GitHub, validate it (non-trivial + parses),
+# back up the current copy, and replace the installed file. Returns {ok,msg}.
+function Update-FromGitHub {
+  $dst = Join-Path $AppDir 'scan-av.ps1'
+  $tmp = Join-Path $env:TEMP ('scanav_update_' + [Guid]::NewGuid().ToString('N') + '.ps1')
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $RawUrl -OutFile $tmp -UseBasicParsing -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+  } catch { return [pscustomobject]@{ ok = $false; msg = "Download failed: $_" } }
+  $content = Get-Content $tmp -Raw -ErrorAction SilentlyContinue
+  if (-not $content -or $content.Length -lt 5000 -or $content -notmatch 'function Show-Gui') {
+    return [pscustomobject]@{ ok = $false; msg = 'Downloaded file looks invalid; not applied.' }
+  }
+  $perr = $null
+  [void][System.Management.Automation.Language.Parser]::ParseInput($content, [ref]$null, [ref]$perr)
+  if ($perr -and $perr.Count) { return [pscustomobject]@{ ok = $false; msg = 'Downloaded file has parse errors; not applied.' } }
+  try {
+    if (Test-Path $dst) { Copy-Item $dst "$dst.bak" -Force }
+    Copy-Item $tmp $dst -Force
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ ok = $true; msg = 'Updated to the latest version from GitHub. Restart to use it.' }
+  } catch { return [pscustomobject]@{ ok = $false; msg = "Could not replace installed file: $_" } }
+}
+
 # ---------------------------------------------------------------- GUI
-# A WinForms app: pick folders to scan, add/remove them, update definitions on
-# demand, and view logs. Actual scanning is handed to the console engine (a new
-# powershell window running this same script) so the UI never freezes and the
-# user gets live -Verbose output.
+# A WinForms app: pick folders (and sub-folders) to scan, add/remove them, update
+# definitions, view logs, and self-update from GitHub. Scanning is handed to the
+# console engine (a new powershell window) so the UI never freezes.
 function Show-Gui {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
@@ -604,51 +630,124 @@ function Show-Gui {
   }
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
 
+  $accent     = [System.Drawing.Color]::FromArgb(33,118,235)
+  $accentDark = [System.Drawing.Color]::FromArgb(22,92,194)
+  $panelBg    = [System.Drawing.Color]::FromArgb(245,247,250)
+  $btnGrey    = [System.Drawing.Color]::FromArgb(232,235,239)
+  $ink        = [System.Drawing.Color]::FromArgb(28,32,40)
+  $placeholder = '__loading__'
+  $script:guiSuppress = $false
+
   $form = New-Object System.Windows.Forms.Form
-  $form.Text = 'scan-av  -  on-demand malware scanner'
-  $form.Size = New-Object System.Drawing.Size(660,560)
+  $form.Text = 'scan-av'
+  $form.ClientSize = New-Object System.Drawing.Size(800,690)
   $form.StartPosition = 'CenterScreen'
+  $form.FormBorderStyle = 'FixedSingle'
+  $form.MaximizeBox = $false
+  $form.BackColor = $panelBg
   $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
+  # --- header banner ---
+  $header = New-Object System.Windows.Forms.Panel
+  $header.Location = New-Object System.Drawing.Point(0,0)
+  $header.Size = New-Object System.Drawing.Size(800,58)
+  $header.BackColor = $accent
+  $form.Controls.Add($header)
+  $hTitle = New-Object System.Windows.Forms.Label
+  $hTitle.Text = 'scan-av'
+  $hTitle.ForeColor = [System.Drawing.Color]::White
+  $hTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 16, [System.Drawing.FontStyle]::Bold)
+  $hTitle.Location = New-Object System.Drawing.Point(16,8); $hTitle.AutoSize = $true
+  $header.Controls.Add($hTitle)
+  $hSub = New-Object System.Windows.Forms.Label
+  $hSub.Text = 'on-demand malware scanner'
+  $hSub.ForeColor = [System.Drawing.Color]::FromArgb(220,232,255)
+  $hSub.Location = New-Object System.Drawing.Point(18,36); $hSub.AutoSize = $true
+  $header.Controls.Add($hSub)
+
+  $styleBtn = {
+    param($b, [bool]$primary)
+    $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 0; $b.Cursor = 'Hand'
+    $b.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    if ($primary) { $b.BackColor = $accent; $b.ForeColor = [System.Drawing.Color]::White; $b.FlatAppearance.MouseOverBackColor = $accentDark }
+    else          { $b.BackColor = $btnGrey; $b.ForeColor = $ink }
+  }
+
   $lbl = New-Object System.Windows.Forms.Label
-  $lbl.Text = 'Folders to scan  (check the ones to include):'
-  $lbl.Location = New-Object System.Drawing.Point(12,10); $lbl.AutoSize = $true
+  $lbl.Text = 'Folders & sub-folders  -  check the ones to include (expand to pick sub-folders):'
+  $lbl.Location = New-Object System.Drawing.Point(16,70); $lbl.AutoSize = $true
   $form.Controls.Add($lbl)
 
-  $clb = New-Object System.Windows.Forms.CheckedListBox
-  $clb.Location = New-Object System.Drawing.Point(12,32)
-  $clb.Size = New-Object System.Drawing.Size(620,168)
-  $clb.CheckOnClick = $true
-  $form.Controls.Add($clb)
+  # --- folder/sub-folder tree (checkboxes, lazy-loaded children) ---
+  $tree = New-Object System.Windows.Forms.TreeView
+  $tree.Location = New-Object System.Drawing.Point(16,92)
+  $tree.Size = New-Object System.Drawing.Size(480,400)
+  $tree.CheckBoxes = $true
+  $tree.BorderStyle = 'FixedSingle'
+  $tree.BackColor = [System.Drawing.Color]::White
+  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+  $form.Controls.Add($tree)
 
-  $cbRescan = New-Object System.Windows.Forms.CheckBox
-  $cbRescan.Text = 'Rescan all (ignore cache)'
-  $cbRescan.Location = New-Object System.Drawing.Point(12,208); $cbRescan.AutoSize = $true
-  $form.Controls.Add($cbRescan)
-  $cbVerbose = New-Object System.Windows.Forms.CheckBox
-  $cbVerbose.Text = 'Verbose output'; $cbVerbose.Checked = $true
-  $cbVerbose.Location = New-Object System.Drawing.Point(230,208); $cbVerbose.AutoSize = $true
-  $form.Controls.Add($cbVerbose)
-
+  # --- console output ---
   $out = New-Object System.Windows.Forms.TextBox
   $out.Multiline = $true; $out.ScrollBars = 'Vertical'; $out.ReadOnly = $true
-  $out.Location = New-Object System.Drawing.Point(12,322)
-  $out.Size = New-Object System.Drawing.Size(620,182)
+  $out.Location = New-Object System.Drawing.Point(16,500)
+  $out.Size = New-Object System.Drawing.Size(768,150)
   $out.Font = New-Object System.Drawing.Font('Consolas', 9)
+  $out.BackColor = [System.Drawing.Color]::FromArgb(17,21,28)
+  $out.ForeColor = [System.Drawing.Color]::FromArgb(214,222,235)
   $form.Controls.Add($out)
 
+  $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
   $status = New-Object System.Windows.Forms.Label
-  $status.Text = ("Engines: {0}{1}   Mode: {2}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode)
-  $status.Location = New-Object System.Drawing.Point(12,512); $status.AutoSize = $true
+  $status.Text = ("Engines: {0}{1}    Mode: {2}    Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'on'} else {'off'}))
+  $status.ForeColor = [System.Drawing.Color]::FromArgb(90,98,110)
+  $status.Location = New-Object System.Drawing.Point(16,658); $status.AutoSize = $true
   $form.Controls.Add($status)
 
-  # helper script-blocks
+  # --- helpers ---
   $log = { param($m) $out.AppendText([string]$m + "`r`n") }
-  $fillList = {
-    $clb.Items.Clear()
-    foreach ($f in @($cfg.scanFolders)) { [void]$clb.Items.Add($f, $true) }
-  }
   $saveCfg = { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
+
+  function New-FolderNode([string]$path) {
+    $n = New-Object System.Windows.Forms.TreeNode((Split-Path $path -Leaf))
+    $n.Tag = $path
+    try {
+      $sub = @(Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+      if ($sub.Count -gt 0) { [void]$n.Nodes.Add($placeholder) }
+    } catch {}
+    return $n
+  }
+  function Load-Children($node) {
+    if ($node.Nodes.Count -eq 1 -and $node.Nodes[0].Text -eq $placeholder) {
+      $node.Nodes.Clear()
+      try {
+        Get-ChildItem -LiteralPath ([string]$node.Tag) -Directory -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+          $c = New-FolderNode $_.FullName; $c.Checked = $node.Checked; [void]$node.Nodes.Add($c)
+        }
+      } catch {}
+    }
+  }
+  $fillTree = {
+    $tree.Nodes.Clear()
+    foreach ($f in @($cfg.scanFolders)) {
+      if (Test-Path $f) { $n = New-FolderNode $f; $n.Checked = $true; [void]$tree.Nodes.Add($n) }
+      else { $n = New-Object System.Windows.Forms.TreeNode(("{0}  (missing)" -f $f)); $n.Tag = $f; [void]$tree.Nodes.Add($n) }
+    }
+  }
+  $collectTargets = {
+    $res = New-Object System.Collections.ArrayList
+    $st  = New-Object System.Collections.Stack
+    foreach ($n in $tree.Nodes) { $st.Push($n) }
+    while ($st.Count -gt 0) {
+      $n = $st.Pop()
+      if ($n.Text -eq $placeholder) { continue }
+      if ($null -ne $n.Parent -and $n.Parent.Checked) { continue }  # covered by checked ancestor
+      if ($n.Checked -and $n.Tag) { [void]$res.Add([string]$n.Tag); continue }  # topmost checked
+      foreach ($c in $n.Nodes) { $st.Push($c) }                    # unchecked -> descend
+    }
+    ,$res.ToArray()
+  }
   $launch = {
     param([string[]]$ScanArgs)
     $a = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File', ('"{0}"' -f $ps1)) + $ScanArgs
@@ -656,56 +755,93 @@ function Show-Gui {
     if ($cbRescan.Checked)  { $a += '-RescanAll' }
     Start-Process -FilePath 'powershell.exe' -ArgumentList $a
   }
-  & $fillList
 
+  $tree.Add_BeforeExpand({ param($s,$e) Load-Children $e.Node })
+  $tree.Add_AfterCheck({
+    param($s,$e)
+    if ($script:guiSuppress) { return }
+    $script:guiSuppress = $true
+    try {
+      $checked = $e.Node.Checked
+      $st = New-Object System.Collections.Stack
+      foreach ($c in $e.Node.Nodes) { $st.Push($c) }
+      while ($st.Count -gt 0) { $n = $st.Pop(); if ($n.Text -ne $placeholder) { $n.Checked = $checked }; foreach ($c in $n.Nodes) { $st.Push($c) } }
+    } finally { $script:guiSuppress = $false }
+  })
+  & $fillTree
+
+  # --- right-hand button column + toggles ---
   $mkBtn = {
-    param($text,$x,$y,$w)
+    param($text,$x,$y,$w,$h,[bool]$primary)
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $text
     $b.Location = New-Object System.Drawing.Point([int]$x,[int]$y)
-    $b.Size = New-Object System.Drawing.Size([int]$w,30)
+    $b.Size = New-Object System.Drawing.Size([int]$w,[int]$h)
+    & $styleBtn $b $primary
     $form.Controls.Add($b)
     $b
   }
-  $btnScan    = & $mkBtn 'Scan checked'        12  248 130
-  $btnScanAll = & $mkBtn 'Scan all'           150  248 100
-  $btnUpdate  = & $mkBtn 'Update definitions' 258  248 150
-  $btnAdd     = & $mkBtn 'Add folder...'       12  285 130
-  $btnRemove  = & $mkBtn 'Remove checked'     150  285 130
-  $btnLogsDir = & $mkBtn 'Open logs folder'   288  285 140
-  $btnViewLog = & $mkBtn 'View last log'      438  285 120
+  $cx = 512; $cw = 272
+  $btnScan    = & $mkBtn 'Scan checked'         $cx  92 $cw 40 $true
+  $btnScanAll = & $mkBtn 'Scan all'             $cx 140 $cw 34 $false
+  $btnUpdate  = & $mkBtn 'Update definitions'   $cx 182 $cw 34 $false
+  $btnAdd     = & $mkBtn 'Add folder...'        $cx 230 $cw 32 $false
+  $btnRemove  = & $mkBtn 'Remove checked'       $cx 268 $cw 32 $false
+  $btnLogsDir = & $mkBtn 'Open logs folder'     $cx 312 $cw 32 $false
+  $btnViewLog = & $mkBtn 'View last log'        $cx 350 $cw 32 $false
+  $btnUpdApp  = & $mkBtn 'Update app (GitHub)'  $cx 392 $cw 32 $false
 
+  $cbRescan = New-Object System.Windows.Forms.CheckBox
+  $cbRescan.Text = 'Rescan all (ignore cache)'
+  $cbRescan.Location = New-Object System.Drawing.Point($cx,436); $cbRescan.AutoSize = $true
+  $form.Controls.Add($cbRescan)
+  $cbVerbose = New-Object System.Windows.Forms.CheckBox
+  $cbVerbose.Text = 'Verbose output'; $cbVerbose.Checked = $true
+  $cbVerbose.Location = New-Object System.Drawing.Point($cx,460); $cbVerbose.AutoSize = $true
+  $form.Controls.Add($cbVerbose)
+
+  # --- button handlers ---
   $btnScan.Add_Click({
-    $sel = @($clb.CheckedItems | ForEach-Object { "$_" })
-    if (-not $sel.Count) { & $log 'No folders checked.'; return }
-    & $log ("Scanning {0} folder(s) in a new window..." -f $sel.Count)
+    $sel = @(& $collectTargets)
+    if (-not $sel.Count) { & $log 'Nothing checked.'; return }
+    & $log ("Scanning {0} item(s) in a new window..." -f $sel.Count)
     & $launch (@('-Path') + $sel)
   })
   $btnScanAll.Add_Click({ & $log 'Scanning all configured folders...'; & $launch @() })
-  $btnUpdate.Add_Click({ & $log 'Updating definitions...'; & $launch @('-Update') })
+  $btnUpdate.Add_Click({ & $log 'Updating definitions in a new window...'; & $launch @('-Update') })
   $btnAdd.Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
       $p = $dlg.SelectedPath
-      $list = @($cfg.scanFolders)
-      if ($list -notcontains $p) { $cfg.scanFolders = @($list + $p); & $saveCfg; & $fillList; & $log "Added: $p" }
+      if (@($cfg.scanFolders) -notcontains $p) { $cfg.scanFolders = @(@($cfg.scanFolders) + $p); & $saveCfg; & $fillTree; & $log "Added: $p" }
       else { & $log "Already present: $p" }
     }
   })
   $btnRemove.Add_Click({
-    $sel = @($clb.CheckedItems | ForEach-Object { "$_" })
-    if (-not $sel.Count) { & $log 'Check the folders to remove first.'; return }
-    $cfg.scanFolders = @(@($cfg.scanFolders) | Where-Object { $sel -notcontains $_ })
-    & $saveCfg; & $fillList; & $log ("Removed {0} folder(s)." -f $sel.Count)
+    $tops = @($tree.Nodes | Where-Object { $_.Checked } | ForEach-Object { [string]$_.Tag })
+    if (-not $tops.Count) { & $log 'Check a top-level folder to remove it.'; return }
+    $cfg.scanFolders = @(@($cfg.scanFolders) | Where-Object { $tops -notcontains $_ })
+    & $saveCfg; & $fillTree; & $log ("Removed {0} folder(s) from the list." -f $tops.Count)
   })
   $btnLogsDir.Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } else { & $log 'No logs yet.' } })
   $btnViewLog.Add_Click({
     $last = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($last) { $out.Text = (Get-Content $last.FullName -Raw); $out.SelectionStart = $out.TextLength; $out.ScrollToCaret() }
-    else { & $log 'No logs yet.' }
+    if ($last) { $out.Text = (Get-Content $last.FullName -Raw) } else { & $log 'No logs yet.' }
+  })
+  $btnUpdApp.Add_Click({
+    & $log 'Checking GitHub for the latest version...'
+    $r = Update-FromGitHub
+    & $log $r.msg
+    if ($r.ok) {
+      $ans = [System.Windows.Forms.MessageBox]::Show('Update applied. Restart the app now?','scan-av',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Question)
+      if ($ans -eq [System.Windows.Forms.DialogResult]::Yes) {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File', ('"{0}"' -f $ps1), '-Gui')
+        $form.Close()
+      }
+    }
   })
 
-  & $log 'Ready. Check folders and click "Scan checked", or "Scan all".'
+  & $log 'Ready. Tick folders (expand for sub-folders), then "Scan checked" - or "Scan all".'
   [void]$form.ShowDialog()
 }
 
@@ -751,6 +887,7 @@ if ($InstallEngines)   { Install-Engines; return }
 if ($Shortcut)         { New-DesktopShortcut -Elevated $true; return }
 if ($NoPromptShortcut) { Register-NoPromptTask; return }
 if ($Gui)              { Show-Gui; return }
+if ($SelfUpdate)       { $r = Update-FromGitHub; if ($r.ok) { Ok $r.msg } else { Bad $r.msg }; return }
 if ($Configure)        { Invoke-Configure | Out-Null; return }
 
 # manage the saved scan-folder list without re-running the whole wizard
