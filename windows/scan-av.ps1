@@ -799,12 +799,17 @@ function Show-Gui {
     }
     ,$res.ToArray()
   }
+  # Launch the console scanner via -Command (not -File): -File can't bind a string[]
+  # array, and unquoted paths with spaces get split onto the wrong parameter. With
+  # -Command we pass a real PowerShell expression with a single-quoted path array.
   $launch = {
-    param([string[]]$ScanArgs)
-    $a = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File', ('"{0}"' -f $ps1)) + $ScanArgs
-    if ($cbVerbose.Checked) { $a += '-Verbose' }
-    if ($cbRescan.Checked)  { $a += '-RescanAll' }
-    Start-Process -FilePath 'powershell.exe' -ArgumentList $a
+    param([string]$ParamExpr)
+    $extra = ''
+    if ($cbVerbose.Checked) { $extra += ' -Verbose' }
+    if ($cbRescan.Checked)  { $extra += ' -RescanAll' }
+    $ps1q = $ps1 -replace "'", "''"
+    $cmd  = "& '$ps1q' $ParamExpr$extra"
+    Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"$cmd`"")
   }
 
   $tree.Add_BeforeExpand({ param($s,$e) Load-Children $e.Node })
@@ -877,11 +882,13 @@ function Show-Gui {
   $btnScan.Add_Click({
     $sel = @(& $collectTargets)
     if (-not $sel.Count) { & $log 'Nothing checked.'; return }
+    # build a single-quoted PowerShell array literal so spaces are preserved
+    $pathExpr = ($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
     & $log ("Scanning {0} item(s) in a new window..." -f $sel.Count)
-    & $launch (@('-Path') + $sel)
+    & $launch ("-Path $pathExpr")
   })
-  $btnScanAll.Add_Click({ & $log 'Scanning all configured folders...'; & $launch @() })
-  $btnUpdate.Add_Click({ & $log 'Updating definitions in a new window...'; & $launch @('-Update') })
+  $btnScanAll.Add_Click({ & $log 'Scanning all configured folders...'; & $launch '' })
+  $btnUpdate.Add_Click({ & $log 'Updating definitions in a new window...'; & $launch '-Update' })
   $btnAdd.Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
