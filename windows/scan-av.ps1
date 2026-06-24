@@ -51,6 +51,7 @@ param(
   [switch]$Full,
   [ValidateSet('clamav','emsisoft','both','config')] [string]$Engine = 'config',
   [switch]$Update,
+  [switch]$NoUpdate,
   [switch]$Help
 )
 
@@ -148,6 +149,7 @@ function Invoke-Configure {
   $modeFull = AskYesNo '  Scan FULL archive contents instead of just executables? (slower)' $false
   $maxFile  = [int](Ask '  ClamAV max single-file size in MB (<=2000)' '2000')
   $maxScan  = [int](Ask '  ClamAV max total scan size per container in MB' '4000')
+  $autoUpd  = AskYesNo '  Auto-update virus definitions before scanning?' $true
 
   $cfg = [ordered]@{
     version   = 1
@@ -157,6 +159,7 @@ function Invoke-Configure {
     options   = [ordered]@{
       mode='exec'; maxFileSizeMB=$maxFile; maxScanSizeMB=$maxScan
       execExtensions=$DefaultExecExt; tempDir=''
+      autoUpdate=$autoUpd; updateMaxAgeHours=12
     }
   }
   if ($modeFull) { $cfg.options.mode = 'full' }
@@ -515,6 +518,29 @@ function Scan-Target {
   return [pscustomobject]@{ Target=$name; Hits=$totalHits; Results=$results }
 }
 
+# ---------------------------------------------------------------- definitions
+function Update-Definitions {
+  param($Cfg, [string[]]$Engines)
+  Sec 'Updating virus definitions'
+  $ok = $true
+  if (($Engines -contains 'clamav') -and $Cfg.tools.freshclam) {
+    Info 'freshclam...'
+    $fcDir = Split-Path $Cfg.tools.freshclam
+    $fa = @()
+    $conf = Join-Path $fcDir 'freshclam.conf'; if (Test-Path $conf) { $fa += "--config-file=$conf" }
+    $db   = Join-Path $fcDir 'database';       if (Test-Path $db)   { $fa += "--datadir=$db" }
+    $rc = Invoke-Native -Exe $Cfg.tools.freshclam -Arguments $fa -Log (Join-Path $LogDir 'freshclam.log')
+    if ($rc -eq 0) { Ok 'ClamAV definitions up to date.' } else { Warn "freshclam exit $rc (see logs\freshclam.log)"; $ok = $false }
+  }
+  if (($Engines -contains 'emsisoft') -and $Cfg.tools.a2cmd) {
+    Info 'a2cmd /update...'
+    $rc = Invoke-Native -Exe $Cfg.tools.a2cmd -Arguments @('/update') -Log (Join-Path $LogDir 'a2update.log')
+    if ($rc -eq 0) { Ok 'Emsisoft definitions up to date.' } else { Warn "a2cmd /update exit $rc (see logs\a2update.log)"; $ok = $false }
+  }
+  if ($ok) { Set-Content -Path (Join-Path $AppDir 'last-update.txt') -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII }
+  return $ok
+}
+
 # ================================================================ MAIN
 if ($Install)          { Invoke-Install; return }
 if ($InstallEngines)   { Install-Engines; return }
@@ -535,16 +561,25 @@ if ($want.emsisoft -and $cfg.tools.a2cmd)    { $engines += 'emsisoft' }
 if (-not $engines) { Bad 'No usable engine for this run (check config / -Engine).'; return }
 if ($Full) { $cfg.options.mode = 'full' }
 
-# definition updates
+# definition updates: -Update forces; -NoUpdate skips; otherwise auto-update when the
+# config enables it AND definitions are older than options.updateMaxAgeHours.
+$doUpdate = $false
 if ($Update) {
-  Sec 'Updating virus definitions'
-  if (($engines -contains 'clamav') -and $cfg.tools.freshclam) {
-    Info 'freshclam...'; try { & $cfg.tools.freshclam *> (Join-Path $LogDir 'freshclam.log'); Ok 'ClamAV defs updated.' } catch { Warn "freshclam failed: $_" }
-  }
-  if (($engines -contains 'emsisoft') -and $cfg.tools.a2cmd) {
-    Info 'a2cmd /update...'; try { & $cfg.tools.a2cmd '/update' *> (Join-Path $LogDir 'a2update.log'); Ok 'Emsisoft defs updated.' } catch { Warn "a2cmd update failed: $_" }
+  $doUpdate = $true
+} elseif (-not $NoUpdate) {
+  $auto = if ($null -ne $cfg.options.autoUpdate) { [bool]$cfg.options.autoUpdate } else { $true }
+  if ($auto) {
+    $maxAge = if ($cfg.options.updateMaxAgeHours) { [double]$cfg.options.updateMaxAgeHours } else { 12 }
+    $stamp  = Join-Path $AppDir 'last-update.txt'
+    $ageH   = $null
+    if (Test-Path $stamp) {
+      try { $ageH = ([DateTime]::UtcNow - [DateTime]::Parse((Get-Content $stamp -Raw).Trim()).ToUniversalTime()).TotalHours } catch { $ageH = $null }
+    }
+    if (($null -eq $ageH) -or ($ageH -ge $maxAge)) { $doUpdate = $true }
+    else { Info ("Definitions updated {0:N1}h ago (< {1}h) - skipping. Use -Update to force." -f $ageH, $maxAge) }
   }
 }
+if ($doUpdate) { Update-Definitions -Cfg $cfg -Engines $engines | Out-Null }
 
 # targets
 $targets = if ($Path) { $Path } else { $cfg.scanFolders }

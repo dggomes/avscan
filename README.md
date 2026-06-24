@@ -69,13 +69,25 @@ On first run (or `scan-av -Configure`) a wizard:
 ```powershell
 scan-av                                # scan all configured folders, both engines
 scan-av -Path 'D:\Downloads\Game.rar'  # scan one archive or folder
-scan-av -Update                        # refresh ClamAV + Emsisoft definitions first
+scan-av -Update                        # force a definition refresh now
+scan-av -NoUpdate                      # skip the auto-update for this run
 scan-av -Engine clamav                 # force a single engine (clamav | emsisoft | both)
 scan-av -Full                          # extract & scan everything, not just executables
 scan-av -Configure                     # re-run setup
 ```
 
 Per-scan logs land in `%LOCALAPPDATA%\ScanAV\logs`.
+
+### Auto-updating definitions
+
+By default (you're asked during setup) scan-av **refreshes ClamAV + Emsisoft
+definitions before each scan**, but only if they're older than
+`updateMaxAgeHours` (12h) — so back-to-back scans don't re-download every time. A
+timestamp is kept in `%LOCALAPPDATA%\ScanAV\last-update.txt`.
+
+- `-Update` forces a refresh now, `-NoUpdate` skips it for that run.
+- Toggle the default or the interval via `scan-av -Configure` (or edit
+  `autoUpdate` / `updateMaxAgeHours` in `config.json`).
 
 ### Desktop shortcut & avoiding UAC prompts
 
