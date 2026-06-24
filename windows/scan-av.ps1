@@ -432,9 +432,12 @@ function Invoke-Native {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    if ($Live -and $Log) { & $Exe @Arguments 2>&1 | Tee-Object -FilePath $Log | Out-Host }
-    elseif ($Live)       { & $Exe @Arguments 2>&1 | Out-Host }
-    elseif ($Log)        { & $Exe @Arguments 2>&1 | Out-File -FilePath $Log -Encoding UTF8 }
+    # Stringify the merged stream so native stderr shows as plain text instead of
+    # red PowerShell NativeCommandError blocks (clamscan's per-file "Can't fstat"
+    # warnings are not fatal and shouldn't look like a script error).
+    if ($Live -and $Log) { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log | Out-Host }
+    elseif ($Live)       { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-Host }
+    elseif ($Log)        { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath $Log -Encoding UTF8 }
     else                 { & $Exe @Arguments 2>&1 | Out-Null }
   } catch { if ($Log) { "scan-av: native call raised: $_" | Out-File -FilePath $Log -Append -Encoding UTF8 } }
   finally { $ErrorActionPreference = $prev }
