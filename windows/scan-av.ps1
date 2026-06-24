@@ -52,6 +52,7 @@ param(
   [ValidateSet('clamav','emsisoft','both','config')] [string]$Engine = 'config',
   [switch]$Update,
   [switch]$NoUpdate,
+  [switch]$NoElevate,
   [switch]$Help
 )
 
@@ -98,6 +99,33 @@ function Find-Tool {
     } catch {}
   }
   return $null
+}
+
+# ---------------------------------------------------------------- elevation
+function Test-IsAdmin {
+  try { (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator) }
+  catch { $false }
+}
+
+# Relaunch this script elevated, forwarding the original parameters, so Emsisoft's
+# a2cmd runs inline (no separate self-elevation window mid-scan). Returns $true if a
+# new elevated process was started (caller should then exit).
+function Invoke-RelaunchElevated {
+  param([hashtable]$Bound)
+  if (-not $PSCommandPath) { return $false }   # can't relaunch a -Command invocation
+  $a = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$PSCommandPath`"")
+  foreach ($k in $Bound.Keys) {
+    if ($k -eq 'NoElevate') { continue }
+    $v = $Bound[$k]
+    if ($v -is [System.Management.Automation.SwitchParameter]) { if ($v.IsPresent) { $a += "-$k" } }
+    elseif ($v -is [array]) { $a += "-$k"; $a += (($v | ForEach-Object { '"' + $_ + '"' }) -join ',') }
+    else { $a += "-$k"; $a += ('"' + $v + '"') }
+  }
+  try {
+    $hostExe = (Get-Process -Id $PID).Path   # the powershell.exe running us
+    Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $a -ErrorAction Stop
+    return $true
+  } catch { Warn "Elevation cancelled/failed: $_"; return $false }
 }
 
 function Ask {
@@ -160,7 +188,7 @@ function Invoke-Configure {
     options   = [ordered]@{
       mode='exec'; maxFileSizeMB=$maxFile; maxScanSizeMB=$maxScan
       execExtensions=$DefaultExecExt; tempDir=''
-      autoUpdate=$autoUpd; updateMaxAgeHours=12
+      autoUpdate=$autoUpd; updateMaxAgeHours=12; autoElevate=$true
     }
   }
   if ($modeFull) { $cfg.options.mode = 'full' }
@@ -566,6 +594,18 @@ if ($want.clamav   -and $cfg.tools.clamscan) { $engines += 'clamav' }
 if ($want.emsisoft -and $cfg.tools.a2cmd)    { $engines += 'emsisoft' }
 if (-not $engines) { Bad 'No usable engine for this run (check config / -Engine).'; return }
 if ($Full) { $cfg.options.mode = 'full' }
+
+# Auto-elevate: Emsisoft's a2cmd requires admin and self-elevates into a separate
+# window mid-scan. Relaunch the whole run elevated first (ONE UAC prompt) so a2cmd
+# runs inline. Skipped if already admin (e.g. launched from the elevated shortcut),
+# if -NoElevate, if config disables it, or if Emsisoft isn't part of this run.
+$autoElev = if ($null -ne $cfg.options.autoElevate) { [bool]$cfg.options.autoElevate } else { $true }
+if (($engines -contains 'emsisoft') -and $autoElev -and -not $NoElevate -and -not (Test-IsAdmin)) {
+  Info 'Emsisoft needs admin - relaunching elevated (one UAC prompt)...'
+  if (Invoke-RelaunchElevated -Bound $PSBoundParameters) { return }
+  Warn 'Not elevated; Emsisoft may open its own UAC window. (Use -NoElevate to silence this, or -Engine clamav.)'
+}
+
 # -Verbose streams each engine's live per-file output to the console
 $script:LiveScan = ($VerbosePreference -ne 'SilentlyContinue')
 if ($script:LiveScan) { Info 'Verbose: streaming live engine output.' }

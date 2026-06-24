@@ -92,9 +92,14 @@ timestamp is kept in `%LOCALAPPDATA%\ScanAV\last-update.txt`.
 
 ### Desktop shortcut & avoiding UAC prompts
 
-`-Install` creates a **Scan-AV** desktop shortcut automatically. It's marked "Run as
-administrator" so Emsisoft's `a2cmd` (which self-elevates) prompts **once** at launch
-instead of popping a separate elevated console on every scan.
+Emsisoft's `a2cmd` requires admin and self-elevates — popping a separate console
+window mid-scan. scan-av handles this two ways:
+
+- **Auto-elevation:** when a run uses Emsisoft and isn't already elevated, scan-av
+  relaunches itself elevated (one UAC prompt) so `a2cmd` runs inline. Disable per-run
+  with `-NoElevate`, or permanently via `autoElevate` in `config.json`.
+- **`-Install` creates a "Scan-AV" desktop shortcut** marked "Run as administrator",
+  so launching it is already elevated (no relaunch needed).
 
 ```powershell
 scan-av -Shortcut          # (re)create the elevated desktop shortcut
