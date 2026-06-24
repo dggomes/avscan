@@ -73,6 +73,7 @@ scan-av -Update                        # force a definition refresh now
 scan-av -NoUpdate                      # skip the auto-update for this run
 scan-av -Engine clamav                 # force a single engine (clamav | emsisoft | both)
 scan-av -Full                          # extract & scan everything, not just executables
+scan-av -Verbose                       # stream each engine's live per-file output to the console
 scan-av -Configure                     # re-run setup
 ```
 

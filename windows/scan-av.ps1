@@ -62,6 +62,7 @@ $AppDir  = Join-Path $env:LOCALAPPDATA 'ScanAV'
 $CfgFile = Join-Path $AppDir 'config.json'
 $LogDir  = Join-Path $AppDir 'logs'
 $EngDir  = Join-Path $AppDir 'engines'
+$script:LiveScan = $false   # set true by -Verbose: stream engine output live to console
 $ArchiveExt = @('.rar','.7z','.zip','.zipx','.001','.tar','.gz','.cab','.iso')
 $DefaultExecExt = @('exe','dll','msi','bat','cmd','ps1','vbs','scr','com','sys','jar','lnk','hta','js','wsf','ocx','cpl','efi')
 
@@ -396,12 +397,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
 # (e.g. clamscan's skippable "Can't fstat descriptor" warnings) into a terminating
 # NativeCommandError. We localize EAP=Continue and capture all streams to a log.
 function Invoke-Native {
-  param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @(), [string]$Log)
+  # $Live = $true streams output to the console (Tee-Object) AND logs it; otherwise
+  # output is captured silently to $Log. Out-Host consumes the pipeline so the streamed
+  # lines never leak into the function's return value ($LASTEXITCODE).
+  param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @(), [string]$Log, [bool]$Live = $false)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    if ($Log) { & $Exe @Arguments 2>&1 | Out-File -FilePath $Log -Encoding UTF8 }
-    else      { & $Exe @Arguments 2>&1 | Out-Null }
+    if ($Live -and $Log) { & $Exe @Arguments 2>&1 | Tee-Object -FilePath $Log | Out-Host }
+    elseif ($Live)       { & $Exe @Arguments 2>&1 | Out-Host }
+    elseif ($Log)        { & $Exe @Arguments 2>&1 | Out-File -FilePath $Log -Encoding UTF8 }
+    else                 { & $Exe @Arguments 2>&1 | Out-Null }
   } catch { if ($Log) { "scan-av: native call raised: $_" | Out-File -FilePath $Log -Append -Encoding UTF8 } }
   finally { $ErrorActionPreference = $prev }
   return $LASTEXITCODE
@@ -412,7 +418,7 @@ function Run-ClamAV {
   $a = @('-r', "--max-filesize=$($Cfg.options.maxFileSizeMB)M",
               "--max-scansize=$($Cfg.options.maxScanSizeMB)M",
               '--alert-exceeds-max=yes', $Target)
-  $rc = Invoke-Native -Exe $Cfg.tools.clamscan -Arguments $a -Log $Log
+  $rc = Invoke-Native -Exe $Cfg.tools.clamscan -Arguments $a -Log $Log -Live $script:LiveScan
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   $hits  = @($lines | Where-Object { $_ -match ' FOUND$' -and $_ -notmatch 'Heuristics\.Limits\.Exceeded' })
   $skips = @($lines | Where-Object { $_ -match 'Heuristics\.Limits\.Exceeded' })
@@ -424,7 +430,7 @@ function Run-Emsisoft {
   param([string]$Target, [string]$Log, $Cfg)
   # We scan an already-extracted folder, so simple recursive/all-files is enough.
   $a = @("/f=$Target", '/s', '/a', '/pup', "/log=$Log", '/loglevel=detailed')
-  $rc = Invoke-Native -Exe $Cfg.tools.a2cmd -Arguments $a -Log (Join-Path $LogDir '_a2cmd_console.txt')
+  $rc = Invoke-Native -Exe $Cfg.tools.a2cmd -Arguments $a -Log (Join-Path $LogDir '_a2cmd_console.txt') -Live $script:LiveScan
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   # a2cmd detection lines contain 'detected:'; summary has 'Scanned'/'Detected'
   $hits = @($lines | Where-Object { $_ -match 'detected:' -and $_ -notmatch '^\s*Detected:' })
@@ -560,6 +566,9 @@ if ($want.clamav   -and $cfg.tools.clamscan) { $engines += 'clamav' }
 if ($want.emsisoft -and $cfg.tools.a2cmd)    { $engines += 'emsisoft' }
 if (-not $engines) { Bad 'No usable engine for this run (check config / -Engine).'; return }
 if ($Full) { $cfg.options.mode = 'full' }
+# -Verbose streams each engine's live per-file output to the console
+$script:LiveScan = ($VerbosePreference -ne 'SilentlyContinue')
+if ($script:LiveScan) { Info 'Verbose: streaming live engine output.' }
 
 # definition updates: -Update forces; -NoUpdate skips; otherwise auto-update when the
 # config enables it AND definitions are older than options.updateMaxAgeHours.
