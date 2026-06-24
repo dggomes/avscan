@@ -77,6 +77,23 @@ scan-av -Configure                     # re-run setup
 
 Per-scan logs land in `%LOCALAPPDATA%\ScanAV\logs`.
 
+### Desktop shortcut & avoiding UAC prompts
+
+`-Install` creates a **Scan-AV** desktop shortcut automatically. It's marked "Run as
+administrator" so Emsisoft's `a2cmd` (which self-elevates) prompts **once** at launch
+instead of popping a separate elevated console on every scan.
+
+```powershell
+scan-av -Shortcut          # (re)create the elevated desktop shortcut
+scan-av -NoPromptShortcut  # ZERO prompts: register an elevated scheduled task +
+                           # a shortcut that triggers it. Run as Administrator ONCE.
+```
+
+`-NoPromptShortcut` is the only way to fully suppress the UAC prompt (UAC can't be
+disabled per-app otherwise, and turning UAC off globally is a bad idea). It registers
+a Scheduled Task with highest privileges; the desktop shortcut then launches that task,
+which runs elevated with no prompt.
+
 ---
 
 ## macOS / Linux — `scan-archive`

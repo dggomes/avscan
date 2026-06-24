@@ -45,6 +45,8 @@ param(
   [switch]$Install,
   [switch]$InstallEngines,
   [switch]$Configure,
+  [switch]$Shortcut,
+  [switch]$NoPromptShortcut,
   [string[]]$Path,
   [switch]$Full,
   [ValidateSet('clamav','emsisoft','both','config')] [string]$Engine = 'config',
@@ -276,6 +278,61 @@ function Install-Engines {
   Invoke-Configure -Pre $pre | Out-Null
 }
 
+# ---------------------------------------------------------------- desktop shortcut
+# Plain desktop shortcut that runs scan-av. -Elevated marks it "Run as administrator"
+# so Emsisoft's a2cmd (which self-elevates) doesn't pop a separate UAC/cmd window on
+# every run -- you approve once at launch instead of once per scan/archive.
+function New-DesktopShortcut {
+  param([bool]$Elevated = $true)
+  $ps1 = Join-Path $AppDir 'scan-av.ps1'
+  if (-not (Test-Path $ps1)) { Warn "scan-av.ps1 not found in $AppDir - run -Install first."; return }
+  try {
+    $lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Scan-AV.lnk'
+    $ws  = New-Object -ComObject WScript.Shell
+    $lnk = $ws.CreateShortcut($lnkPath)
+    $lnk.TargetPath       = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $lnk.Arguments        = "-NoExit -ExecutionPolicy Bypass -File `"$ps1`""
+    $lnk.WorkingDirectory = $AppDir
+    $lnk.Description       = 'Run scan-av antivirus scan'
+    $lnk.IconLocation     = 'imageres.dll,79'
+    $lnk.Save()
+    if ($Elevated) {
+      # set the "Run as administrator" bit (byte 0x15, flag 0x20) in the .lnk
+      $b = [IO.File]::ReadAllBytes($lnkPath); $b[0x15] = $b[0x15] -bor 0x20
+      [IO.File]::WriteAllBytes($lnkPath, $b)
+    }
+    Ok "Desktop shortcut created: $lnkPath"
+    if ($Elevated) { Info 'It runs elevated -> one UAC prompt at launch, no per-scan Emsisoft prompts.' }
+  } catch { Warn "Could not create desktop shortcut: $_" }
+}
+
+# Zero-prompt option: an elevated Scheduled Task (RunLevel Highest) plus a desktop
+# shortcut that triggers it. Registering the task needs admin ONCE; after that the
+# task -- and therefore a2cmd -- runs elevated with no UAC prompt at all.
+function Register-NoPromptTask {
+  $ps1 = Join-Path $AppDir 'scan-av.ps1'
+  if (-not (Test-Path $ps1)) { Warn "scan-av.ps1 not found in $AppDir - run -Install first."; return }
+  try {
+    $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoExit -ExecutionPolicy Bypass -File `"$ps1`""
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName 'ScanAV' -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    Ok "Elevated scheduled task 'ScanAV' registered (no UAC prompt when run)."
+    $lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Scan-AV.lnk'
+    $ws  = New-Object -ComObject WScript.Shell
+    $lnk = $ws.CreateShortcut($lnkPath)
+    $lnk.TargetPath   = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    $lnk.Arguments    = '/run /tn ScanAV'
+    $lnk.IconLocation = 'imageres.dll,79'
+    $lnk.Description  = 'Run scan-av (elevated, no prompt)'
+    $lnk.Save()
+    Ok "Desktop shortcut now triggers the task (zero prompts): $lnkPath"
+  } catch {
+    Warn "Could not register the elevated task: $_"
+    Warn 'Run PowerShell **as Administrator** once, then: scan-av -NoPromptShortcut'
+  }
+}
+
 # ---------------------------------------------------------------- install
 function Invoke-Install {
   param([switch]$WithEngines)
@@ -318,6 +375,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
   if ($env:Path -notlike "*$AppDir*") { $env:Path += ";$AppDir" }
   Info "You can run 'scan-av' here now, and in any newly-opened terminal."
   Ok "Installed to $AppDir"
+  Write-Host ''
+  # desktop shortcut (elevated, so Emsisoft doesn't prompt per scan)
+  New-DesktopShortcut -Elevated $true
+  Info "For ZERO UAC prompts, run PowerShell as Admin once: scan-av -NoPromptShortcut"
   Write-Host ''
   if ($WithEngines -or (AskYesNo 'Auto-download & install ClamAV + Emsisoft now?' $true)) {
     Install-Engines
@@ -455,9 +516,11 @@ function Scan-Target {
 }
 
 # ================================================================ MAIN
-if ($Install)        { Invoke-Install; return }
-if ($InstallEngines) { Install-Engines; return }
-if ($Configure)      { Invoke-Configure | Out-Null; return }
+if ($Install)          { Invoke-Install; return }
+if ($InstallEngines)   { Install-Engines; return }
+if ($Shortcut)         { New-DesktopShortcut -Elevated $true; return }
+if ($NoPromptShortcut) { Register-NoPromptTask; return }
+if ($Configure)        { Invoke-Configure | Out-Null; return }
 
 $cfg = Load-Config
 if (-not $cfg) { Warn 'No config found - running first-run setup.'; $cfg = Invoke-Configure; if (-not $cfg) { return } }
