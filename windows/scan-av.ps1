@@ -227,8 +227,8 @@ function Install-ClamAV {
   if (Test-Path $fresh) {
     $freshPath = $fresh
     Info '  downloading definitions (freshclam, ~300 MB first time)...'
-    try { & $fresh "--config-file=$fcConf" --datadir="$dbDir" *> (Join-Path $LogDir 'freshclam_install.log'); Ok '  definitions updated.' }
-    catch { Warn "  freshclam failed (run it later): $_" }
+    $frc = Invoke-Native -Exe $fresh -Arguments @("--config-file=$fcConf", "--datadir=$dbDir") -Log (Join-Path $LogDir 'freshclam_install.log')
+    if ($frc -eq 0) { Ok '  definitions updated.' } else { Warn "  freshclam exit $frc (see logs\freshclam_install.log; you can run it later)." }
   }
   return [pscustomobject]@{ clamscan=$clamExe.FullName; freshclam=$freshPath }
 }
@@ -243,7 +243,7 @@ function Install-Emsisoft {
   try { Get-File 'https://dl.emsisoft.com/EmsisoftEmergencyKit.exe' $sfx } catch { Warn "  download failed: $_"; return $null }
   New-Item -ItemType Directory -Force $dest | Out-Null
   $extracted = $false
-  if ($SevenZip) { try { & $SevenZip x $sfx "-o$dest" '-y' *> $null; $extracted = $true } catch {} }
+  if ($SevenZip) { $null = Invoke-Native -Exe $SevenZip -Arguments @('x', $sfx, "-o$dest", '-y'); if (Test-Path $dest) { $extracted = $true } }
   if (-not $extracted) {
     Warn '  Could not silently extract (7-Zip needed). Launching the EEK extractor - accept the default folder, then re-run: scan-av -Configure'
     Start-Process $sfx; return $null
@@ -252,7 +252,8 @@ function Install-Emsisoft {
   if (-not $a2) { Warn '  a2cmd.exe not found after extraction; run the EEK GUI once, then: scan-av -Configure'; return $null }
   Ok "  installed: $($a2.FullName)"
   Info '  updating Emsisoft definitions (large first-time download)...'
-  try { & $a2.FullName '/update' *> (Join-Path $LogDir 'a2update_install.log'); Ok '  definitions updated.' } catch { Warn "  a2cmd /update failed (run later): $_" }
+  $urc = Invoke-Native -Exe $a2.FullName -Arguments @('/update') -Log (Join-Path $LogDir 'a2update_install.log')
+  if ($urc -eq 0) { Ok '  definitions updated.' } else { Warn "  a2cmd /update exit $urc (run later)." }
   return $a2.FullName
 }
 
@@ -326,13 +327,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
 }
 
 # ---------------------------------------------------------------- engines
+# Run a native exe WITHOUT letting its stderr abort the script. With
+# $ErrorActionPreference='Stop', PowerShell turns any native-command stderr line
+# (e.g. clamscan's skippable "Can't fstat descriptor" warnings) into a terminating
+# NativeCommandError. We localize EAP=Continue and capture all streams to a log.
+function Invoke-Native {
+  param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @(), [string]$Log)
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($Log) { & $Exe @Arguments 2>&1 | Out-File -FilePath $Log -Encoding UTF8 }
+    else      { & $Exe @Arguments 2>&1 | Out-Null }
+  } catch { if ($Log) { "scan-av: native call raised: $_" | Out-File -FilePath $Log -Append -Encoding UTF8 } }
+  finally { $ErrorActionPreference = $prev }
+  return $LASTEXITCODE
+}
+
 function Run-ClamAV {
   param([string]$Target, [string]$Log, $Cfg)
   $a = @('-r', "--max-filesize=$($Cfg.options.maxFileSizeMB)M",
               "--max-scansize=$($Cfg.options.maxScanSizeMB)M",
               '--alert-exceeds-max=yes', $Target)
-  & $Cfg.tools.clamscan @a *> $Log
-  $rc = $LASTEXITCODE
+  $rc = Invoke-Native -Exe $Cfg.tools.clamscan -Arguments $a -Log $Log
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   $hits  = @($lines | Where-Object { $_ -match ' FOUND$' -and $_ -notmatch 'Heuristics\.Limits\.Exceeded' })
   $skips = @($lines | Where-Object { $_ -match 'Heuristics\.Limits\.Exceeded' })
@@ -344,8 +360,7 @@ function Run-Emsisoft {
   param([string]$Target, [string]$Log, $Cfg)
   # We scan an already-extracted folder, so simple recursive/all-files is enough.
   $a = @("/f=$Target", '/s', '/a', '/pup', "/log=$Log", '/loglevel=detailed')
-  & $Cfg.tools.a2cmd @a *> (Join-Path $LogDir '_a2cmd_console.txt')
-  $rc = $LASTEXITCODE
+  $rc = Invoke-Native -Exe $Cfg.tools.a2cmd -Arguments $a -Log (Join-Path $LogDir '_a2cmd_console.txt')
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   # a2cmd detection lines contain 'detected:'; summary has 'Scanned'/'Detected'
   $hits = @($lines | Where-Object { $_ -match 'detected:' -and $_ -notmatch '^\s*Detected:' })
@@ -359,10 +374,10 @@ function Extract-Surface {
   if (-not $Cfg.tools.sevenZip) { throw '7-Zip not configured; cannot extract archives.' }
   New-Item -ItemType Directory -Force -Path $Dest | Out-Null
   if ($Cfg.options.mode -eq 'full') {
-    & $Cfg.tools.sevenZip x $Archive "-o$Dest" '-y' *> $null
+    $null = Invoke-Native -Exe $Cfg.tools.sevenZip -Arguments @('x', $Archive, "-o$Dest", '-y')
   } else {
     $inc = $Cfg.options.execExtensions | ForEach-Object { "-ir!*.$_" }
-    & $Cfg.tools.sevenZip x $Archive "-o$Dest" @inc '-y' *> $null
+    $null = Invoke-Native -Exe $Cfg.tools.sevenZip -Arguments (@('x', $Archive, "-o$Dest") + $inc + @('-y'))
   }
 }
 
@@ -380,7 +395,9 @@ function Scan-Target {
     Sec "ARCHIVE: $name"
     # list >2GiB members (ClamAV can't scan those)
     if ($Cfg.tools.sevenZip) {
+      $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
       $list = & $Cfg.tools.sevenZip l $Target 2>$null
+      $ErrorActionPreference = $prevEAP
       $big = $list | Where-Object { $_ -match '^\d{4}-\d{2}-\d{2}' } |
         ForEach-Object {
           $c = ($_ -split '\s+'); if ($c.Count -ge 5 -and $c[3] -match '^\d+$' -and [int64]$c[3] -gt 2147483647) {
@@ -415,6 +432,9 @@ function Scan-Target {
     if ($r.Hits.Count -gt 0) {
       Bad ("{0}: {1} DETECTION(S)" -f $r.Engine, $r.Hits.Count)
       $r.Hits | ForEach-Object { Bad "    $_" }
+    } elseif (-not $r.Scanned -or $r.Scanned -eq '0') {
+      # no summary / 0 files = the engine errored or had nothing to scan, NOT a clean result
+      Warn ("{0}: no result (exit {1}) - it errored or found nothing to scan. See log." -f $r.Engine, $r.Rc)
     } else {
       $sk = if ($r.Skipped) { " ($($r.Skipped) skipped >limit)" } else { '' }
       Ok ("{0}: clean - scanned {1} file(s){2}" -f $r.Engine, $r.Scanned, $sk)
