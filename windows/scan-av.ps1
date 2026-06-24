@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-  scan-av — on-demand multi-engine antivirus scanner for Windows.
+  scan-av - on-demand multi-engine antivirus scanner for Windows.
   Runs ClamAV (clamscan) and/or Emsisoft Emergency Kit (a2cmd) over folders
   and large game archives, working around ClamAV's 2 GiB-per-file limit by
   extracting only the executable "threat surface" with 7-Zip before scanning.
@@ -110,7 +110,7 @@ function AskYesNo { param([string]$Prompt,[bool]$Default=$true)
 # ---------------------------------------------------------------- configure
 function Invoke-Configure {
   param([hashtable]$Pre = @{})
-  Sec 'scan-av  —  first-run configuration'
+  Sec 'scan-av  -  first-run configuration'
   New-Item -ItemType Directory -Force -Path $AppDir, $LogDir | Out-Null
 
   Info 'Detecting tools (this can take a moment the first time)...'
@@ -127,7 +127,7 @@ function Invoke-Configure {
   $a2     = Ask '  Emsisoft (a2cmd.exe)'   $a2
   foreach ($v in 'sevenZ','clam','fresh','a2') { if ((Get-Variable $v).Value -eq '-') { Set-Variable $v '' } }
 
-  if (-not $sevenZ) { Warn '7-Zip not set — archive (.rar/.7z) scanning will be disabled; folders still work.' }
+  if (-not $sevenZ) { Warn '7-Zip not set - archive (.rar/.7z) scanning will be disabled; folders still work.' }
   $useClam = [bool]$clam -and (AskYesNo '  Enable ClamAV engine?'   $([bool]$clam))
   $useEms  = [bool]$a2   -and (AskYesNo '  Enable Emsisoft engine?' $([bool]$a2))
   if (-not ($useClam -or $useEms)) { Bad 'No engine enabled. Install ClamAV and/or Emsisoft Emergency Kit, then re-run -Configure.'; return $null }
@@ -245,7 +245,7 @@ function Install-Emsisoft {
   $extracted = $false
   if ($SevenZip) { try { & $SevenZip x $sfx "-o$dest" '-y' *> $null; $extracted = $true } catch {} }
   if (-not $extracted) {
-    Warn '  Could not silently extract (7-Zip needed). Launching the EEK extractor — accept the default folder, then re-run: scan-av -Configure'
+    Warn '  Could not silently extract (7-Zip needed). Launching the EEK extractor - accept the default folder, then re-run: scan-av -Configure'
     Start-Process $sfx; return $null
   }
   $a2 = Get-ChildItem $dest -Recurse -Filter 'a2cmd.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -257,10 +257,10 @@ function Install-Emsisoft {
 }
 
 function Install-Engines {
-  Sec 'scan-av  —  auto-install engines'
+  Sec 'scan-av  -  auto-install engines'
   New-Item -ItemType Directory -Force -Path $EngDir, $LogDir | Out-Null
   Warn 'This downloads 7-Zip, ClamAV and Emsisoft Emergency Kit plus their signature'
-  Warn 'databases — several hundred MB total, needs internet. EEK is free for PRIVATE use only.'
+  Warn 'databases - several hundred MB total, needs internet. EEK is free for PRIVATE use only.'
   if (-not (AskYesNo 'Proceed with download & install?' $true)) { Warn 'Skipped engine install.'; return }
   $sz   = Install-SevenZip
   $clam = Install-ClamAV
@@ -278,7 +278,7 @@ function Install-Engines {
 # ---------------------------------------------------------------- install
 function Invoke-Install {
   param([switch]$WithEngines)
-  Sec 'scan-av  —  install'
+  Sec 'scan-av  -  install'
   New-Item -ItemType Directory -Force -Path $AppDir, $LogDir | Out-Null
   $dest = Join-Path $AppDir 'scan-av.ps1'
   if ($PSCommandPath -and ((Resolve-Path $PSCommandPath).Path -ne (Join-Path $AppDir 'scan-av.ps1'))) {
@@ -294,7 +294,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scan-av.ps1" %*
   $userPath = [Environment]::GetEnvironmentVariable('Path','User')
   if ($userPath -notlike "*$AppDir*") {
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$AppDir", 'User')
-    Ok "Added to PATH (User): $AppDir   — open a NEW terminal to use 'scan-av'."
+    Ok "Added to PATH (User): $AppDir   - open a NEW terminal to use 'scan-av'."
   } else { Info "Already on PATH: $AppDir" }
   Ok "Installed to $AppDir"
   Write-Host ''
@@ -397,7 +397,7 @@ function Scan-Target {
       $r.Hits | ForEach-Object { Bad "    $_" }
     } else {
       $sk = if ($r.Skipped) { " ($($r.Skipped) skipped >limit)" } else { '' }
-      Ok ("{0}: clean — scanned {1} file(s){2}" -f $r.Engine, $r.Scanned, $sk)
+      Ok ("{0}: clean - scanned {1} file(s){2}" -f $r.Engine, $r.Scanned, $sk)
     }
     Info "    log: $log"
   }
@@ -420,7 +420,7 @@ if ($InstallEngines) { Install-Engines; return }
 if ($Configure)      { Invoke-Configure | Out-Null; return }
 
 $cfg = Load-Config
-if (-not $cfg) { Warn 'No config found — running first-run setup.'; $cfg = Invoke-Configure; if (-not $cfg) { return } }
+if (-not $cfg) { Warn 'No config found - running first-run setup.'; $cfg = Invoke-Configure; if (-not $cfg) { return } }
 
 # which engines this run
 $engines = @()
@@ -448,7 +448,7 @@ $targets = if ($Path) { $Path } else { $cfg.scanFolders }
 if (-not $targets) { Warn 'Nothing to scan. Pass -Path <file/folder> or add folders via -Configure.'; return }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-Sec ("scan-av  —  engines: {0}   mode: {1}   targets: {2}" -f ($engines -join '+'), $cfg.options.mode, @($targets).Count)
+Sec ("scan-av  -  engines: {0}   mode: {1}   targets: {2}" -f ($engines -join '+'), $cfg.options.mode, @($targets).Count)
 
 $all = @()
 foreach ($t in $targets) { $all += (Scan-Target -Target $t -Cfg $cfg -Engines $engines) }
