@@ -294,8 +294,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scan-av.ps1" %*
   $userPath = [Environment]::GetEnvironmentVariable('Path','User')
   if ($userPath -notlike "*$AppDir*") {
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$AppDir", 'User')
-    Ok "Added to PATH (User): $AppDir   - open a NEW terminal to use 'scan-av'."
+    Ok "Added to PATH (User): $AppDir"
   } else { Info "Already on PATH: $AppDir" }
+  # make 'scan-av' usable in THIS session too (User PATH only affects new terminals)
+  if ($env:Path -notlike "*$AppDir*") { $env:Path += ";$AppDir" }
+  Info "You can now run 'scan-av' here, or open a new terminal to use it anywhere."
   Ok "Installed to $AppDir"
   Write-Host ''
   if ($WithEngines -or (AskYesNo 'Auto-download & install ClamAV + Emsisoft now?' $true)) {
