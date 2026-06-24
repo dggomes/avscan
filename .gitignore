@@ -1,0 +1,15 @@
+# scan output / temp
+logs/
+*.log
+_scanarchive_*/
+_avscan_*/
+_quarantine_*/
+scanlogs/
+
+# OS noise
+.DS_Store
+._*
+Thumbs.db
+
+# local config (machine-specific paths)
+config.json

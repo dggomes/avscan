@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+#
+# scan-archive — antivirus-scan large game/software archives with ClamAV,
+#                working around ClamAV's hard 2 GiB-per-file limit.
+#
+# What it does, for each archive you give it:
+#   1. Lists the contents and flags any file >2 GiB (which ClamAV cannot scan).
+#   2. Extracts only the executable/script "threat surface" (.exe/.dll/...)
+#      to a temp folder — never the multi-GB data/asset blobs.
+#   3. Scans that surface with ClamAV using sane size limits.
+#   4. Tells you clearly whether anything was a REAL detection vs. just a
+#      file-too-big skip (Heuristics.Limits.Exceeded — NOT a virus).
+#   5. Cleans up the temp folder.
+#
+# Usage:
+#   scan-archive [options] <archive> [<archive> ...]
+#
+# Options:
+#   --full        Extract & scan EVERYTHING (not just executables). Slow; giant
+#                 files >2 GiB still get skipped, but media/zips get inspected.
+#   --update      Run `freshclam` first to update virus definitions.
+#   --keep        Don't delete the extracted temp folder (for inspection).
+#   --tmp <dir>   Where to extract (default: alongside the archive).
+#   -h, --help    Show this help.
+#
+# Exit codes: 0 = all clean | 1 = real malware found | 2 = usage/tool error
+#
+# Requires: clamscan, 7z (p7zip).  Both already installed via Homebrew.
+
+set -u
+
+# ---- executable / script extensions that make up the real threat surface ----
+EXEC_EXTS=(exe dll msi bat cmd ps1 vbs scr com sys jar lnk pif hta js wsf)
+
+# ---- ClamAV limits (2000M keeps us safely under the 2 GiB-1 hard ceiling) ----
+MAX_FILESIZE="2000M"
+MAX_SCANSIZE="4000M"
+
+FULL=0
+UPDATE=0
+KEEP=0
+TMP_BASE=""
+
+usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+
+# ---------- arg parsing ----------
+ARCHIVES=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --full)   FULL=1 ;;
+    --update) UPDATE=1 ;;
+    --keep)   KEEP=1 ;;
+    --tmp)    shift; TMP_BASE="${1:-}" ;;
+    -h|--help) usage 0 ;;
+    -*) echo "Unknown option: $1" >&2; usage 2 ;;
+    *)  ARCHIVES+=("$1") ;;
+  esac
+  shift
+done
+
+[ "${#ARCHIVES[@]}" -eq 0 ] && usage 2
+
+# ---------- dependency check ----------
+for tool in clamscan 7z; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: '$tool' not found in PATH." >&2; exit 2; }
+done
+
+if [ "$UPDATE" -eq 1 ]; then
+  echo "==> Updating virus definitions (freshclam)..."
+  freshclam 2>&1 | grep -viE 'X509 store' | tail -4
+  echo
+fi
+
+# build 7z include flags for executable extraction
+INCLUDE_FLAGS=()
+for e in "${EXEC_EXTS[@]}"; do INCLUDE_FLAGS+=("-ir!*.${e}"); done
+
+OVERALL_RC=0
+
+for ARCHIVE in "${ARCHIVES[@]}"; do
+  echo "════════════════════════════════════════════════════════════════"
+  echo "ARCHIVE: $ARCHIVE"
+  echo "════════════════════════════════════════════════════════════════"
+
+  if [ ! -f "$ARCHIVE" ]; then
+    echo "  !! Not found — skipping."; echo; OVERALL_RC=2; continue
+  fi
+
+  echo "  Size: $(ls -lh "$ARCHIVE" | awk '{print $5}')"
+
+  # ---- 1. peek inside, flag files ClamAV can't scan (>2 GiB) ----
+  echo
+  echo "  --- Files larger than 2 GiB (cannot be scanned by ClamAV) ---"
+  # 7z listing columns: Date Time Attr Size Compressed Name...
+  # Only real file rows: Date Time Attr Size Compressed Name...
+  # ($3 is the attribute column like "....." — never numeric; this skips the
+  #  trailing totals line whose 3rd field is the grand-total size.)
+  big=$(7z l "$ARCHIVE" 2>/dev/null | awk '
+    /^[0-9]{4}-[0-9]{2}-[0-9]{2}/ && $3 !~ /^[0-9]/ && $4 ~ /^[0-9]+$/ && $4+0 > 2147483647 {
+      size=$4; $1=$2=$3=$4=$5=""; sub(/^ +/,"");
+      printf "      %6.2f GiB  %s\n", size/1073741824, $0
+    }')
+  if [ -n "$big" ]; then echo "$big"; else echo "      (none — everything fits)"; fi
+
+  # ---- 2. extract the threat surface ----
+  if [ -n "$TMP_BASE" ]; then
+    OUT="$TMP_BASE/_scanarchive_$$_$(basename "$ARCHIVE" | tr ' /' '__')"
+  else
+    OUT="$(dirname "$ARCHIVE")/_scanarchive_$$_$(basename "$ARCHIVE" | tr ' /' '__')"
+  fi
+  rm -rf "$OUT"; mkdir -p "$OUT" || { echo "  !! Cannot create temp dir $OUT"; OVERALL_RC=2; continue; }
+
+  echo
+  if [ "$FULL" -eq 1 ]; then
+    echo "  --- Extracting ALL contents (--full) ... ---"
+    7z x "$ARCHIVE" -o"$OUT" -y >/dev/null 2>&1
+  else
+    echo "  --- Extracting executable/script files only ... ---"
+    7z x "$ARCHIVE" -o"$OUT" "${INCLUDE_FLAGS[@]}" -y >/dev/null 2>&1
+  fi
+  n_files=$(find "$OUT" -type f ! -name '._*' | wc -l | tr -d ' ')
+  echo "      extracted $n_files file(s), $(du -sh "$OUT" 2>/dev/null | awk '{print $1}')"
+
+  if [ "$n_files" -eq 0 ]; then
+    echo "      (nothing to scan)"; [ "$KEEP" -eq 0 ] && rm -rf "$OUT"; echo; continue
+  fi
+
+  # ---- 3. scan ----
+  echo
+  echo "  --- ClamAV scan ---"
+  LOG="$OUT/.clamscan.log"
+  clamscan -r --max-filesize="$MAX_FILESIZE" --max-scansize="$MAX_SCANSIZE" \
+           --alert-exceeds-max=yes "$OUT" > "$LOG" 2>&1
+  scan_rc=$?
+
+  # ---- 4. interpret results ----
+  # Real detections = FOUND lines that are NOT the size-limit heuristic.
+  real_hits=$(grep ' FOUND$' "$LOG" | grep -v 'Heuristics.Limits.Exceeded' || true)
+  skipped=$(grep 'Heuristics.Limits.Exceeded' "$LOG" | grep ' FOUND$' || true)
+
+  grep -E 'Scanned files:|Infected files:|Data scanned:' "$LOG" | sed 's/^/      /'
+
+  if [ -n "$skipped" ]; then
+    echo
+    echo "      NOTE: these files were too big to scan (NOT infections):"
+    echo "$skipped" | sed 's/:.*//; s|'"$OUT"'/||; s/^/        - /'
+  fi
+
+  echo
+  if [ -n "$real_hits" ]; then
+    echo "  *** REAL MALWARE DETECTED ***"
+    echo "$real_hits" | sed 's|'"$OUT"'/||; s/^/      /'
+    OVERALL_RC=1
+  elif [ "$scan_rc" -eq 0 ] || [ -z "$real_hits" ]; then
+    echo "  ✅ CLEAN — no known malware in the scanned executables."
+  fi
+
+  # ---- 5. cleanup ----
+  if [ "$KEEP" -eq 1 ]; then
+    echo "  (temp kept at: $OUT)"
+  else
+    rm -rf "$OUT"
+  fi
+  echo
+done
+
+echo "════════════════════════════════════════════════════════════════"
+case "$OVERALL_RC" in
+  0) echo "DONE — all archives clean." ;;
+  1) echo "DONE — MALWARE FOUND in at least one archive (see above)." ;;
+  *) echo "DONE — finished with warnings/errors." ;;
+esac
+echo
+echo "Reminder: ClamAV is signature-based. For cracked/repacked games, a clean"
+echo "result means 'no known signature matched' — upload the small crack .exe/.dll"
+echo "to VirusTotal for a 70-engine second opinion if you want more confidence."
+exit "$OVERALL_RC"
