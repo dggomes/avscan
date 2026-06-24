@@ -58,6 +58,7 @@ param(
   [string[]]$AddFolder,
   [string[]]$RemoveFolder,
   [switch]$ListFolders,
+  [switch]$Gui,
   [switch]$Help
 )
 
@@ -330,9 +331,10 @@ function New-DesktopShortcut {
     $ws  = New-Object -ComObject WScript.Shell
     $lnk = $ws.CreateShortcut($lnkPath)
     $lnk.TargetPath       = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $lnk.Arguments        = "-NoExit -ExecutionPolicy Bypass -File `"$ps1`""
+    # launch the GUI app (hidden console host + the window)
+    $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" -Gui"
     $lnk.WorkingDirectory = $AppDir
-    $lnk.Description       = 'Run scan-av antivirus scan'
+    $lnk.Description       = 'Open the scan-av app'
     $lnk.IconLocation     = 'imageres.dll,79'
     $lnk.Save()
     if ($Elevated) {
@@ -587,6 +589,126 @@ function Update-Definitions {
   return $ok
 }
 
+# ---------------------------------------------------------------- GUI
+# A WinForms app: pick folders to scan, add/remove them, update definitions on
+# demand, and view logs. Actual scanning is handed to the console engine (a new
+# powershell window running this same script) so the UI never freezes and the
+# user gets live -Verbose output.
+function Show-Gui {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $cfg = Load-Config
+  if (-not $cfg) {
+    [System.Windows.Forms.MessageBox]::Show('No configuration found. Run "scan-av -Install" first.','scan-av') | Out-Null
+    return
+  }
+  $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
+
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = 'scan-av  -  on-demand malware scanner'
+  $form.Size = New-Object System.Drawing.Size(660,560)
+  $form.StartPosition = 'CenterScreen'
+  $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+  $lbl = New-Object System.Windows.Forms.Label
+  $lbl.Text = 'Folders to scan  (check the ones to include):'
+  $lbl.Location = New-Object System.Drawing.Point(12,10); $lbl.AutoSize = $true
+  $form.Controls.Add($lbl)
+
+  $clb = New-Object System.Windows.Forms.CheckedListBox
+  $clb.Location = New-Object System.Drawing.Point(12,32)
+  $clb.Size = New-Object System.Drawing.Size(620,168)
+  $clb.CheckOnClick = $true
+  $form.Controls.Add($clb)
+
+  $cbRescan = New-Object System.Windows.Forms.CheckBox
+  $cbRescan.Text = 'Rescan all (ignore cache)'
+  $cbRescan.Location = New-Object System.Drawing.Point(12,208); $cbRescan.AutoSize = $true
+  $form.Controls.Add($cbRescan)
+  $cbVerbose = New-Object System.Windows.Forms.CheckBox
+  $cbVerbose.Text = 'Verbose output'; $cbVerbose.Checked = $true
+  $cbVerbose.Location = New-Object System.Drawing.Point(230,208); $cbVerbose.AutoSize = $true
+  $form.Controls.Add($cbVerbose)
+
+  $out = New-Object System.Windows.Forms.TextBox
+  $out.Multiline = $true; $out.ScrollBars = 'Vertical'; $out.ReadOnly = $true
+  $out.Location = New-Object System.Drawing.Point(12,322)
+  $out.Size = New-Object System.Drawing.Size(620,182)
+  $out.Font = New-Object System.Drawing.Font('Consolas', 9)
+  $form.Controls.Add($out)
+
+  $status = New-Object System.Windows.Forms.Label
+  $status.Text = ("Engines: {0}{1}   Mode: {2}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode)
+  $status.Location = New-Object System.Drawing.Point(12,512); $status.AutoSize = $true
+  $form.Controls.Add($status)
+
+  # helper script-blocks
+  $log = { param($m) $out.AppendText([string]$m + "`r`n") }
+  $fillList = {
+    $clb.Items.Clear()
+    foreach ($f in @($cfg.scanFolders)) { [void]$clb.Items.Add($f, $true) }
+  }
+  $saveCfg = { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
+  $launch = {
+    param([string[]]$ScanArgs)
+    $a = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File', ('"{0}"' -f $ps1)) + $ScanArgs
+    if ($cbVerbose.Checked) { $a += '-Verbose' }
+    if ($cbRescan.Checked)  { $a += '-RescanAll' }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $a
+  }
+  & $fillList
+
+  $mkBtn = {
+    param($text,$x,$y,$w)
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $text
+    $b.Location = New-Object System.Drawing.Point([int]$x,[int]$y)
+    $b.Size = New-Object System.Drawing.Size([int]$w,30)
+    $form.Controls.Add($b)
+    $b
+  }
+  $btnScan    = & $mkBtn 'Scan checked'        12  248 130
+  $btnScanAll = & $mkBtn 'Scan all'           150  248 100
+  $btnUpdate  = & $mkBtn 'Update definitions' 258  248 150
+  $btnAdd     = & $mkBtn 'Add folder...'       12  285 130
+  $btnRemove  = & $mkBtn 'Remove checked'     150  285 130
+  $btnLogsDir = & $mkBtn 'Open logs folder'   288  285 140
+  $btnViewLog = & $mkBtn 'View last log'      438  285 120
+
+  $btnScan.Add_Click({
+    $sel = @($clb.CheckedItems | ForEach-Object { "$_" })
+    if (-not $sel.Count) { & $log 'No folders checked.'; return }
+    & $log ("Scanning {0} folder(s) in a new window..." -f $sel.Count)
+    & $launch (@('-Path') + $sel)
+  })
+  $btnScanAll.Add_Click({ & $log 'Scanning all configured folders...'; & $launch @() })
+  $btnUpdate.Add_Click({ & $log 'Updating definitions...'; & $launch @('-Update') })
+  $btnAdd.Add_Click({
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+      $p = $dlg.SelectedPath
+      $list = @($cfg.scanFolders)
+      if ($list -notcontains $p) { $cfg.scanFolders = @($list + $p); & $saveCfg; & $fillList; & $log "Added: $p" }
+      else { & $log "Already present: $p" }
+    }
+  })
+  $btnRemove.Add_Click({
+    $sel = @($clb.CheckedItems | ForEach-Object { "$_" })
+    if (-not $sel.Count) { & $log 'Check the folders to remove first.'; return }
+    $cfg.scanFolders = @(@($cfg.scanFolders) | Where-Object { $sel -notcontains $_ })
+    & $saveCfg; & $fillList; & $log ("Removed {0} folder(s)." -f $sel.Count)
+  })
+  $btnLogsDir.Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } else { & $log 'No logs yet.' } })
+  $btnViewLog.Add_Click({
+    $last = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($last) { $out.Text = (Get-Content $last.FullName -Raw); $out.SelectionStart = $out.TextLength; $out.ScrollToCaret() }
+    else { & $log 'No logs yet.' }
+  })
+
+  & $log 'Ready. Check folders and click "Scan checked", or "Scan all".'
+  [void]$form.ShowDialog()
+}
+
 # ---------------------------------------------------------------- scan cache
 # Tracks already-scanned items so unchanged ones are skipped. Keyed by full path;
 # a "signature" of size+mtime (file) or count+size+newest-mtime (folder) detects
@@ -628,6 +750,7 @@ if ($Install)          { Invoke-Install; return }
 if ($InstallEngines)   { Install-Engines; return }
 if ($Shortcut)         { New-DesktopShortcut -Elevated $true; return }
 if ($NoPromptShortcut) { Register-NoPromptTask; return }
+if ($Gui)              { Show-Gui; return }
 if ($Configure)        { Invoke-Configure | Out-Null; return }
 
 # manage the saved scan-folder list without re-running the whole wizard

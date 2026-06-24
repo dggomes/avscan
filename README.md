@@ -64,6 +64,24 @@ On first run (or `scan-av -Configure`) a wizard:
 4. Asks options: exec-only vs. full-archive scan, ClamAV size caps.
 5. Saves everything to `%LOCALAPPDATA%\ScanAV\config.json`.
 
+### The app (GUI)
+
+`-Install` puts a **Scan-AV** shortcut on your desktop that opens a small app:
+
+- a checklist of your configured folders — tick the ones to scan,
+- **Scan checked** / **Scan all** (each runs in its own live console window),
+- **Update definitions** on demand,
+- **Add folder...** / **Remove checked**,
+- **Open logs folder** / **View last log**,
+- **Rescan all** and **Verbose** toggles.
+
+```powershell
+scan-av -Gui     # open the app from the command line too
+```
+
+Scans launched from the app run in a separate console (with live output) so the
+window never freezes. Everything below also works from the command line.
+
 ### Daily use
 
 ```powershell
