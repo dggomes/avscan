@@ -77,6 +77,11 @@ scan-av -Verbose                       # stream each engine's live per-file outp
 scan-av -RescanAll                     # ignore the cache and re-scan everything
 scan-av -NoIncremental                 # disable the skip-unchanged cache for this run
 scan-av -Configure                     # re-run setup
+
+# manage the saved scan-folder list (no full reconfigure needed)
+scan-av -AddFolder 'D:\Games' 'E:\More' # add one or more folders
+scan-av -RemoveFolder 'E:\More'         # remove a folder
+scan-av -ListFolders                    # show the current list
 ```
 
 Per-scan logs land in `%LOCALAPPDATA%\ScanAV\logs`.

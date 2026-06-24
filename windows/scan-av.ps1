@@ -55,6 +55,9 @@ param(
   [switch]$NoElevate,
   [switch]$RescanAll,
   [switch]$NoIncremental,
+  [string[]]$AddFolder,
+  [string[]]$RemoveFolder,
+  [switch]$ListFolders,
   [switch]$Help
 )
 
@@ -626,6 +629,29 @@ if ($InstallEngines)   { Install-Engines; return }
 if ($Shortcut)         { New-DesktopShortcut -Elevated $true; return }
 if ($NoPromptShortcut) { Register-NoPromptTask; return }
 if ($Configure)        { Invoke-Configure | Out-Null; return }
+
+# manage the saved scan-folder list without re-running the whole wizard
+if ($AddFolder -or $RemoveFolder -or $ListFolders) {
+  $cfg = Load-Config
+  if (-not $cfg) { Bad 'No config yet. Run: scan-av -Install   (or scan-av -Configure)'; return }
+  $list = @($cfg.scanFolders)
+  foreach ($f in $AddFolder) {
+    $rf = try { (Resolve-Path -LiteralPath $f -ErrorAction Stop).Path } catch { $f }
+    if (-not (Test-Path $rf)) { Warn "  path not found (added anyway): $rf" }
+    if ($list -notcontains $rf) { $list += $rf; Ok "added: $rf" } else { Info "already present: $rf" }
+  }
+  foreach ($f in $RemoveFolder) {
+    $rf = try { (Resolve-Path -LiteralPath $f -ErrorAction Stop).Path } catch { $f }
+    if ($list -contains $rf) { $list = @($list | Where-Object { $_ -ne $rf }); Ok "removed: $rf" } else { Info "not in list: $rf" }
+  }
+  if ($AddFolder -or $RemoveFolder) {
+    $cfg.scanFolders = @($list)
+    try { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 } catch { Bad "Could not save config: $_"; return }
+  }
+  Sec 'Configured scan folders'
+  if (@($cfg.scanFolders).Count) { @($cfg.scanFolders) | ForEach-Object { Info "  $_" } } else { Info '  (none)' }
+  return
+}
 
 $cfg = Load-Config
 if (-not $cfg) { Warn 'No config found - running first-run setup.'; $cfg = Invoke-Configure; if (-not $cfg) { return } }
