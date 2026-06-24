@@ -290,15 +290,32 @@ function Invoke-Install {
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scan-av.ps1" %*
 "@
   Set-Content -Path (Join-Path $AppDir 'scan-av.cmd') -Value $cmd -Encoding ASCII
-  # add to user PATH if missing
+
+  # add AppDir to user PATH (persists for future terminals)
   $userPath = [Environment]::GetEnvironmentVariable('Path','User')
   if ($userPath -notlike "*$AppDir*") {
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$AppDir", 'User')
     Ok "Added to PATH (User): $AppDir"
   } else { Info "Already on PATH: $AppDir" }
+
+  # KEY FIX: also drop a launcher in %LOCALAPPDATA%\Microsoft\WindowsApps, which is
+  # already on the default user PATH on Win10/11 -> 'scan-av' works in any NEW
+  # terminal with no PATH-refresh dance (Windows Terminal caches PATH at launch).
+  $shimDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+  $shimMsg = $null
+  if (Test-Path $shimDir) {
+    $shimCmd = @"
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
+"@
+    try { Set-Content -Path (Join-Path $shimDir 'scan-av.cmd') -Value $shimCmd -Encoding ASCII -ErrorAction Stop
+          $shimMsg = "Launcher placed on default PATH: $shimDir\scan-av.cmd" } catch { $shimMsg = $null }
+  }
+  if ($shimMsg) { Ok $shimMsg }
+
   # make 'scan-av' usable in THIS session too (User PATH only affects new terminals)
   if ($env:Path -notlike "*$AppDir*") { $env:Path += ";$AppDir" }
-  Info "You can now run 'scan-av' here, or open a new terminal to use it anywhere."
+  Info "You can run 'scan-av' here now, and in any newly-opened terminal."
   Ok "Installed to $AppDir"
   Write-Host ''
   if ($WithEngines -or (AskYesNo 'Auto-download & install ClamAV + Emsisoft now?' $true)) {
