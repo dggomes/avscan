@@ -13,3 +13,5 @@ Thumbs.db
 
 # local config (machine-specific paths)
 config.json
+scan-cache.json
+last-update.txt

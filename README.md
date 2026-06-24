@@ -74,6 +74,8 @@ scan-av -NoUpdate                      # skip the auto-update for this run
 scan-av -Engine clamav                 # force a single engine (clamav | emsisoft | both)
 scan-av -Full                          # extract & scan everything, not just executables
 scan-av -Verbose                       # stream each engine's live per-file output to the console
+scan-av -RescanAll                     # ignore the cache and re-scan everything
+scan-av -NoIncremental                 # disable the skip-unchanged cache for this run
 scan-av -Configure                     # re-run setup
 ```
 
@@ -89,6 +91,22 @@ timestamp is kept in `%LOCALAPPDATA%\ScanAV\last-update.txt`.
 - `-Update` forces a refresh now, `-NoUpdate` skips it for that run.
 - Toggle the default or the interval via `scan-av -Configure` (or edit
   `autoUpdate` / `updateMaxAgeHours` in `config.json`).
+
+### Incremental scanning (skip already-scanned files)
+
+By default scan-av remembers what it has scanned (in
+`%LOCALAPPDATA%\ScanAV\scan-cache.json`) and **skips items that haven't changed**
+since their last clean scan — so re-scanning a big game library only touches new or
+modified games. Change is detected by size + modified-time (no slow re-hashing).
+
+- When a cache exists, scan-av **asks at startup** whether to re-scan everything or
+  only new/changed items (Enter = new only). Automated/non-interactive runs default
+  to new-only without prompting.
+- `-RescanAll` forces a full re-scan (and refreshes the cache); `-NoIncremental`
+  disables the cache for that run. Toggle the default via `scan-av -Configure`
+  (`incremental` in `config.json`).
+- Folders are tracked per immediate child (per game), so adding one game re-scans
+  just that game. Infected items are never cached as clean.
 
 ### Desktop shortcut & avoiding UAC prompts
 

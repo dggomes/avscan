@@ -53,6 +53,8 @@ param(
   [switch]$Update,
   [switch]$NoUpdate,
   [switch]$NoElevate,
+  [switch]$RescanAll,
+  [switch]$NoIncremental,
   [switch]$Help
 )
 
@@ -63,6 +65,7 @@ $AppDir  = Join-Path $env:LOCALAPPDATA 'ScanAV'
 $CfgFile = Join-Path $AppDir 'config.json'
 $LogDir  = Join-Path $AppDir 'logs'
 $EngDir  = Join-Path $AppDir 'engines'
+$CacheFile = Join-Path $AppDir 'scan-cache.json'
 $script:LiveScan = $false   # set true by -Verbose: stream engine output live to console
 $ArchiveExt = @('.rar','.7z','.zip','.zipx','.001','.tar','.gz','.cab','.iso')
 $DefaultExecExt = @('exe','dll','msi','bat','cmd','ps1','vbs','scr','com','sys','jar','lnk','hta','js','wsf','ocx','cpl','efi')
@@ -179,6 +182,7 @@ function Invoke-Configure {
   $maxFile  = [int](Ask '  ClamAV max single-file size in MB (<=2000)' '2000')
   $maxScan  = [int](Ask '  ClamAV max total scan size per container in MB' '4000')
   $autoUpd  = AskYesNo '  Auto-update virus definitions before scanning?' $true
+  $incr     = AskYesNo '  Skip files already scanned & unchanged (incremental)?' $true
 
   $cfg = [ordered]@{
     version   = 1
@@ -188,7 +192,7 @@ function Invoke-Configure {
     options   = [ordered]@{
       mode='exec'; maxFileSizeMB=$maxFile; maxScanSizeMB=$maxScan
       execExtensions=$DefaultExecExt; tempDir=''
-      autoUpdate=$autoUpd; updateMaxAgeHours=12; autoElevate=$true
+      autoUpdate=$autoUpd; updateMaxAgeHours=12; autoElevate=$true; incremental=$incr
     }
   }
   if ($modeFull) { $cfg.options.mode = 'full' }
@@ -516,6 +520,8 @@ function Scan-Target {
     $scanRoot = $temp
   } elseif (Test-Path $Target -PathType Container) {
     Sec "FOLDER: $Target"
+  } elseif (Test-Path $Target -PathType Leaf) {
+    Sec "FILE: $name"   # a single loose file -> scan it directly
   } else {
     Bad "Not found or unsupported: $Target"; return
   }
@@ -578,6 +584,42 @@ function Update-Definitions {
   return $ok
 }
 
+# ---------------------------------------------------------------- scan cache
+# Tracks already-scanned items so unchanged ones are skipped. Keyed by full path;
+# a "signature" of size+mtime (file) or count+size+newest-mtime (folder) detects
+# changes without hashing file contents.
+function Get-Signature {
+  param([string]$Path)
+  try {
+    $it = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($it.PSIsContainer) {
+      $count = 0; $size = [long]0; $maxT = [long]0
+      Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $count++; $size += $_.Length
+        $t = $_.LastWriteTimeUtc.Ticks; if ($t -gt $maxT) { $maxT = $t }
+      }
+      return "D|$count|$size|$maxT"
+    }
+    return "F|$($it.Length)|$($it.LastWriteTimeUtc.Ticks)"
+  } catch { return $null }
+}
+function Load-Cache {
+  $h = @{}
+  if (Test-Path $CacheFile) {
+    try {
+      $j = Get-Content $CacheFile -Raw | ConvertFrom-Json
+      if ($j.entries) { foreach ($p in $j.entries.PSObject.Properties) { $h[$p.Name] = $p.Value } }
+    } catch {}
+  }
+  return $h
+}
+function Save-Cache {
+  param([hashtable]$Cache)
+  $o = [ordered]@{ version = 1; entries = [ordered]@{} }
+  foreach ($k in $Cache.Keys) { $o.entries[$k] = $Cache[$k] }
+  try { ($o | ConvertTo-Json -Depth 6) | Set-Content -Path $CacheFile -Encoding UTF8 } catch { Warn "Could not save scan cache: $_" }
+}
+
 # ================================================================ MAIN
 if ($Install)          { Invoke-Install; return }
 if ($InstallEngines)   { Install-Engines; return }
@@ -637,11 +679,49 @@ if ($doUpdate) { Update-Definitions -Cfg $cfg -Engines $engines | Out-Null }
 $targets = if ($Path) { $Path } else { $cfg.scanFolders }
 if (-not $targets) { Warn 'Nothing to scan. Pass -Path <file/folder> or add folders via -Configure.'; return }
 
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-Sec ("scan-av  -  engines: {0}   mode: {1}   targets: {2}" -f ($engines -join '+'), $cfg.options.mode, @($targets).Count)
+# incremental scan-cache: skip already-scanned, unchanged items
+$incremental = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
+if ($NoIncremental) { $incremental = $false }
+$cache = if ($incremental) { Load-Cache } else { @{} }
 
-$all = @()
-foreach ($t in $targets) { $all += (Scan-Target -Target $t -Cfg $cfg -Engines $engines) }
+# Feature: ask whether to re-scan everything or only new/changed (when a cache exists)
+$rescanAll = [bool]$RescanAll
+if ($incremental -and -not $rescanAll -and $cache.Count -gt 0) {
+  try {
+    $ans = Read-Host 'Re-scan ALL items, or only NEW/CHANGED since last scan? (a = All / Enter = new only)'
+    if ($ans -match '^\s*[Aa]') { $rescanAll = $true }
+  } catch {}   # non-interactive host -> keep new-only
+}
+
+# expand folder targets into immediate children so whole unchanged items get skipped
+$units = @()
+foreach ($t in $targets) {
+  if ($incremental -and (Test-Path $t -PathType Container)) {
+    Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue | ForEach-Object { $units += $_.FullName }
+  } else { $units += $t }
+}
+
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$tag = if ($incremental -and -not $rescanAll) { ' (incremental)' } elseif ($rescanAll) { ' (rescan all)' } else { '' }
+Sec ("scan-av  -  engines: {0}   mode: {1}   items: {2}{3}" -f ($engines -join '+'), $cfg.options.mode, @($units).Count, $tag)
+
+$all = @(); $skipped = 0
+foreach ($u in $units) {
+  $sig = if ($incremental) { Get-Signature $u } else { $null }
+  $entry = $cache[$u]
+  if ($incremental -and -not $rescanAll -and $entry -and ($entry.result -eq 'clean') -and $sig -and ($entry.sig -eq $sig)) {
+    Ok ("cached (clean), skipping: {0}" -f (Split-Path $u -Leaf)); $skipped++; continue
+  }
+  $r = Scan-Target -Target $u -Cfg $cfg -Engines $engines
+  if ($r) {
+    $all += $r
+    if ($incremental) {
+      if ($r.Hits -eq 0) { $cache[$u] = @{ sig = $sig; utc = ([DateTime]::UtcNow.ToString('o')); result = 'clean' } }
+      elseif ($cache.ContainsKey($u)) { $cache.Remove($u) }   # infected -> don't remember as clean
+    }
+  }
+}
+if ($incremental) { Save-Cache -Cache $cache }
 
 # final summary
 Write-Host ''
@@ -651,6 +731,8 @@ foreach ($r in $all) {
   if ($r.Hits -gt 0) { Bad ("  THREAT  {0}  ({1} hit(s))" -f $r.Target, $r.Hits) }
   else               { Ok  ("  clean   {0}" -f $r.Target) }
 }
+if ($skipped -gt 0) { Info ("  cached  {0} unchanged item(s) skipped" -f $skipped) }
 Write-Host ''
-if ($threats) { Bad ("{0} of {1} target(s) flagged. Review logs in $LogDir and verify on VirusTotal." -f $threats.Count, $all.Count) }
-else          { Ok  ("All {0} target(s) clean." -f $all.Count) }
+if ($threats)               { Bad ("{0} of {1} scanned item(s) flagged. Review logs in $LogDir and verify on VirusTotal." -f $threats.Count, $all.Count) }
+elseif ($all.Count -eq 0)   { Ok  ("Nothing new - all {0} item(s) already scanned & unchanged." -f $skipped) }
+else                        { Ok  ("All {0} scanned item(s) clean{1}." -f $all.Count, $(if ($skipped) { " ($skipped skipped, unchanged)" } else { '' })) }
