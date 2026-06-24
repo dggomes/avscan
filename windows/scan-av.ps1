@@ -690,14 +690,45 @@ function Show-Gui {
   $hSub.Location = New-Object System.Drawing.Point(20,46); $hSub.AutoSize = $true
   $header.Controls.Add($hSub)
 
-  # --- folder/sub-folder tree (checkboxes, lazy-loaded children, tall touch rows) ---
+  # --- folder/sub-folder tree with BIG custom checkboxes (touch-friendly) ---
+  # Native TreeView checkboxes are ~13px and untappable on a handheld. Disable them
+  # and use a StateImageList of large 36px boxes (idx 1 = unchecked, 2 = checked);
+  # node.StateImageIndex carries the checked state.
+  $boxImgs = New-Object System.Windows.Forms.ImageList
+  $boxImgs.ImageSize = New-Object System.Drawing.Size(36,36)
+  $boxImgs.ColorDepth = 'Depth32Bit'
+  $mkBox = {
+    param([bool]$checked)
+    $bmp = New-Object System.Drawing.Bitmap 36,36
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = 'AntiAlias'
+    $g.Clear([System.Drawing.Color]::Transparent)
+    if ($checked) {
+      $br = New-Object System.Drawing.SolidBrush $accent
+      $g.FillRectangle($br, 5, 5, 26, 26); $br.Dispose()
+      $wp = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 3.5
+      $g.DrawLines($wp, [System.Drawing.Point[]]@((New-Object System.Drawing.Point 11,19),(New-Object System.Drawing.Point 16,24),(New-Object System.Drawing.Point 26,12)))
+      $wp.Dispose()
+    } else {
+      $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(120,128,140)), 2.5
+      $g.DrawRectangle($pen, 6, 6, 24, 24); $pen.Dispose()
+    }
+    $g.Dispose(); return $bmp
+  }
+  $boxImgs.Images.Add((New-Object System.Drawing.Bitmap 36,36))  # 0 = blank (no state)
+  $boxImgs.Images.Add((& $mkBox $false))                        # 1 = unchecked
+  $boxImgs.Images.Add((& $mkBox $true))                         # 2 = checked
+
   $tree = New-Object System.Windows.Forms.TreeView
   $tree.Dock = 'Fill'
-  $tree.CheckBoxes = $true
+  $tree.CheckBoxes = $false
+  $tree.StateImageList = $boxImgs
   $tree.BorderStyle = 'FixedSingle'
   $tree.BackColor = [System.Drawing.Color]::White
-  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 13)
-  $tree.ItemHeight = 46
+  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 14)
+  $tree.ItemHeight = 54
+  $tree.Indent = 40
+  $tree.ShowLines = $false
   $tree.Margin = New-Object System.Windows.Forms.Padding(8,8,8,4)
   $root.Controls.Add($tree, 0, 1)
 
@@ -715,18 +746,20 @@ function Show-Gui {
   function New-FolderNode([string]$path) {
     $n = New-Object System.Windows.Forms.TreeNode((Split-Path $path -Leaf))
     $n.Tag = $path
+    $n.StateImageIndex = 1   # unchecked by default
     try {
       $sub = @(Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
       if ($sub.Count -gt 0) { [void]$n.Nodes.Add($placeholder) }
     } catch {}
     return $n
   }
+  # checked state lives in StateImageIndex: 1 = unchecked, 2 = checked
   function Load-Children($node) {
     if ($node.Nodes.Count -eq 1 -and $node.Nodes[0].Text -eq $placeholder) {
       $node.Nodes.Clear()
       try {
         Get-ChildItem -LiteralPath ([string]$node.Tag) -Directory -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
-          $c = New-FolderNode $_.FullName; $c.Checked = $node.Checked; [void]$node.Nodes.Add($c)
+          $c = New-FolderNode $_.FullName; $c.StateImageIndex = $node.StateImageIndex; [void]$node.Nodes.Add($c)
         }
       } catch {}
     }
@@ -734,9 +767,24 @@ function Show-Gui {
   $fillTree = {
     $tree.Nodes.Clear()
     foreach ($f in @($cfg.scanFolders)) {
-      if (Test-Path $f) { $n = New-FolderNode $f; $n.Checked = $true; [void]$tree.Nodes.Add($n) }
-      else { $n = New-Object System.Windows.Forms.TreeNode(("{0}  (missing)" -f $f)); $n.Tag = $f; [void]$tree.Nodes.Add($n) }
+      if (Test-Path $f) { $n = New-FolderNode $f; $n.StateImageIndex = 2; [void]$tree.Nodes.Add($n) }
+      else { $n = New-Object System.Windows.Forms.TreeNode(("{0}  (missing)" -f $f)); $n.Tag = $f; $n.StateImageIndex = 1; [void]$tree.Nodes.Add($n) }
     }
+  }
+  $setCheck = {
+    param($node, [int]$idx)
+    $st = New-Object System.Collections.Stack; $st.Push($node)
+    while ($st.Count -gt 0) {
+      $n = $st.Pop()
+      if ($n.Text -ne $placeholder) { $n.StateImageIndex = $idx }
+      foreach ($c in $n.Nodes) { $st.Push($c) }
+    }
+  }
+  $countChecked = {
+    $c = 0; $st = New-Object System.Collections.Stack
+    foreach ($n in $tree.Nodes) { $st.Push($n) }
+    while ($st.Count -gt 0) { $n = $st.Pop(); if ($n.StateImageIndex -eq 2) { $c++ }; foreach ($k in $n.Nodes) { $st.Push($k) } }
+    $c
   }
   $collectTargets = {
     $res = New-Object System.Collections.ArrayList
@@ -745,8 +793,8 @@ function Show-Gui {
     while ($st.Count -gt 0) {
       $n = $st.Pop()
       if ($n.Text -eq $placeholder) { continue }
-      if ($null -ne $n.Parent -and $n.Parent.Checked) { continue }  # covered by checked ancestor
-      if ($n.Checked -and $n.Tag) { [void]$res.Add([string]$n.Tag); continue }  # topmost checked
+      if ($null -ne $n.Parent -and $n.Parent.StateImageIndex -eq 2) { continue }  # covered by checked ancestor
+      if ($n.StateImageIndex -eq 2 -and $n.Tag) { [void]$res.Add([string]$n.Tag); continue }  # topmost checked
       foreach ($c in $n.Nodes) { $st.Push($c) }                    # unchecked -> descend
     }
     ,$res.ToArray()
@@ -760,25 +808,20 @@ function Show-Gui {
   }
 
   $tree.Add_BeforeExpand({ param($s,$e) Load-Children $e.Node })
-  $tree.Add_AfterCheck({
-    param($s,$e)
-    if ($script:guiSuppress) { return }
-    $script:guiSuppress = $true
-    try {
-      $checked = $e.Node.Checked
-      $st = New-Object System.Collections.Stack
-      foreach ($c in $e.Node.Nodes) { $st.Push($c) }
-      while ($st.Count -gt 0) { $n = $st.Pop(); if ($n.Text -ne $placeholder) { $n.Checked = $checked }; foreach ($c in $n.Nodes) { $st.Push($c) } }
-    } finally { $script:guiSuppress = $false }
-  })
-  # touch: tapping anywhere on a row toggles its checkbox (except the expander/checkbox glyph)
+  # touch interaction: tap the big box to (un)check; tap the name to expand/collapse
+  # (a leaf with no children toggles its check when tapped)
   $tree.Add_NodeMouseClick({
     param($s,$e)
+    $node = $e.Node
     $hit = $tree.HitTest($e.Location)
-    if ($hit.Location -ne [System.Windows.Forms.TreeViewHitTestLocations]::StateImage -and
-        $hit.Location -ne [System.Windows.Forms.TreeViewHitTestLocations]::PlusMinus) {
-      $e.Node.Checked = -not $e.Node.Checked
+    if ($hit.Location -eq [System.Windows.Forms.TreeViewHitTestLocations]::StateImage) {
+      $idx = if ($node.StateImageIndex -eq 2) { 1 } else { 2 }; & $setCheck $node $idx
+    } elseif ($node.Nodes.Count -gt 0) {
+      $node.Toggle()
+    } else {
+      $idx = if ($node.StateImageIndex -eq 2) { 1 } else { 2 }; & $setCheck $node $idx
     }
+    & $log ("{0} item(s) selected." -f (& $countChecked))
   })
   & $fillTree
 
@@ -848,7 +891,7 @@ function Show-Gui {
     }
   })
   $btnRemove.Add_Click({
-    $tops = @($tree.Nodes | Where-Object { $_.Checked } | ForEach-Object { [string]$_.Tag })
+    $tops = @($tree.Nodes | Where-Object { $_.StateImageIndex -eq 2 } | ForEach-Object { [string]$_.Tag })
     if (-not $tops.Count) { & $log 'Check a top-level folder to remove it.'; return }
     $cfg.scanFolders = @(@($cfg.scanFolders) | Where-Object { $tops -notcontains $_ })
     & $saveCfg; & $fillTree; & $log ("Removed {0} folder(s) from the list." -f $tops.Count)
@@ -871,7 +914,7 @@ function Show-Gui {
     }
   })
 
-  & $log 'Ready. Tick folders (expand for sub-folders), then "Scan checked" - or "Scan all".'
+  & $log 'Tap the box to select  -  tap the name to open sub-folders. Then "Scan checked".'
   [void]$form.ShowDialog()
 }
 
