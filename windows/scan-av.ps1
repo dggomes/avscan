@@ -638,75 +638,78 @@ function Show-Gui {
   $placeholder = '__loading__'
   $script:guiSuppress = $false
 
+  $bigFont   = New-Object System.Drawing.Font('Segoe UI', 13)
   $form = New-Object System.Windows.Forms.Form
   $form.Text = 'scan-av'
-  $form.ClientSize = New-Object System.Drawing.Size(800,690)
   $form.StartPosition = 'CenterScreen'
-  $form.FormBorderStyle = 'FixedSingle'
-  $form.MaximizeBox = $false
+  $form.AutoScaleMode = 'Font'
+  $form.Font = $bigFont
   $form.BackColor = $panelBg
-  $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+  $form.MinimumSize = New-Object System.Drawing.Size(760,620)
+  $form.Size = New-Object System.Drawing.Size(1000,760)
+  $form.WindowState = 'Maximized'   # fill the handheld screen; still resizable
 
-  # --- header banner ---
-  $header = New-Object System.Windows.Forms.Panel
-  $header.Location = New-Object System.Drawing.Point(0,0)
-  $header.Size = New-Object System.Drawing.Size(800,58)
-  $header.BackColor = $accent
-  $form.Controls.Add($header)
-  $hTitle = New-Object System.Windows.Forms.Label
-  $hTitle.Text = 'scan-av'
-  $hTitle.ForeColor = [System.Drawing.Color]::White
-  $hTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 16, [System.Drawing.FontStyle]::Bold)
-  $hTitle.Location = New-Object System.Drawing.Point(16,8); $hTitle.AutoSize = $true
-  $header.Controls.Add($hTitle)
-  $hSub = New-Object System.Windows.Forms.Label
-  $hSub.Text = 'on-demand malware scanner'
-  $hSub.ForeColor = [System.Drawing.Color]::FromArgb(220,232,255)
-  $hSub.Location = New-Object System.Drawing.Point(18,36); $hSub.AutoSize = $true
-  $header.Controls.Add($hSub)
+  $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
 
   $styleBtn = {
     param($b, [bool]$primary)
     $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 0; $b.Cursor = 'Hand'
-    $b.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $b.Dock = 'Fill'; $b.Margin = New-Object System.Windows.Forms.Padding(6)
+    $b.Font = New-Object System.Drawing.Font('Segoe UI', 13)
     if ($primary) { $b.BackColor = $accent; $b.ForeColor = [System.Drawing.Color]::White; $b.FlatAppearance.MouseOverBackColor = $accentDark }
     else          { $b.BackColor = $btnGrey; $b.ForeColor = $ink }
   }
+  $rowAbs = { param($v) New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]'Absolute', [single]$v) }
+  $rowPct = { param($v) New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]'Percent', [single]$v) }
+  $colPct = { param($v) New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]'Percent', [single]$v) }
 
-  $lbl = New-Object System.Windows.Forms.Label
-  $lbl.Text = 'Folders & sub-folders  -  check the ones to include (expand to pick sub-folders):'
-  $lbl.Location = New-Object System.Drawing.Point(16,70); $lbl.AutoSize = $true
-  $form.Controls.Add($lbl)
+  # --- root layout: header / tree / toggles / buttons / message ---
+  $root = New-Object System.Windows.Forms.TableLayoutPanel
+  $root.Dock = 'Fill'; $root.ColumnCount = 1; $root.RowCount = 5
+  [void]$root.RowStyles.Add((& $rowAbs 76))
+  [void]$root.RowStyles.Add((& $rowPct 100))
+  [void]$root.RowStyles.Add((& $rowAbs 64))
+  [void]$root.RowStyles.Add((& $rowAbs 176))
+  [void]$root.RowStyles.Add((& $rowAbs 40))
+  $form.Controls.Add($root)
 
-  # --- folder/sub-folder tree (checkboxes, lazy-loaded children) ---
+  # header banner
+  $header = New-Object System.Windows.Forms.Panel
+  $header.Dock = 'Fill'; $header.BackColor = $accent
+  $root.Controls.Add($header, 0, 0)
+  $hTitle = New-Object System.Windows.Forms.Label
+  $hTitle.Text = 'scan-av'
+  $hTitle.ForeColor = [System.Drawing.Color]::White
+  $hTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 20, [System.Drawing.FontStyle]::Bold)
+  $hTitle.Location = New-Object System.Drawing.Point(18,8); $hTitle.AutoSize = $true
+  $header.Controls.Add($hTitle)
+  $hSub = New-Object System.Windows.Forms.Label
+  $hSub.Text = ("Engines: {0}{1}    Mode: {2}    Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'on'} else {'off'}))
+  $hSub.ForeColor = [System.Drawing.Color]::FromArgb(223,234,255)
+  $hSub.Font = New-Object System.Drawing.Font('Segoe UI', 11)
+  $hSub.Location = New-Object System.Drawing.Point(20,46); $hSub.AutoSize = $true
+  $header.Controls.Add($hSub)
+
+  # --- folder/sub-folder tree (checkboxes, lazy-loaded children, tall touch rows) ---
   $tree = New-Object System.Windows.Forms.TreeView
-  $tree.Location = New-Object System.Drawing.Point(16,92)
-  $tree.Size = New-Object System.Drawing.Size(480,400)
+  $tree.Dock = 'Fill'
   $tree.CheckBoxes = $true
   $tree.BorderStyle = 'FixedSingle'
   $tree.BackColor = [System.Drawing.Color]::White
-  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-  $form.Controls.Add($tree)
+  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 13)
+  $tree.ItemHeight = 46
+  $tree.Margin = New-Object System.Windows.Forms.Padding(8,8,8,4)
+  $root.Controls.Add($tree, 0, 1)
 
-  # --- console output ---
-  $out = New-Object System.Windows.Forms.TextBox
-  $out.Multiline = $true; $out.ScrollBars = 'Vertical'; $out.ReadOnly = $true
-  $out.Location = New-Object System.Drawing.Point(16,500)
-  $out.Size = New-Object System.Drawing.Size(768,150)
-  $out.Font = New-Object System.Drawing.Font('Consolas', 9)
-  $out.BackColor = [System.Drawing.Color]::FromArgb(17,21,28)
-  $out.ForeColor = [System.Drawing.Color]::FromArgb(214,222,235)
-  $form.Controls.Add($out)
-
-  $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
-  $status = New-Object System.Windows.Forms.Label
-  $status.Text = ("Engines: {0}{1}    Mode: {2}    Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'on'} else {'off'}))
-  $status.ForeColor = [System.Drawing.Color]::FromArgb(90,98,110)
-  $status.Location = New-Object System.Drawing.Point(16,658); $status.AutoSize = $true
-  $form.Controls.Add($status)
+  # message line (replaces the console box; scan output shows in its own window)
+  $msg = New-Object System.Windows.Forms.Label
+  $msg.Dock = 'Fill'; $msg.TextAlign = 'MiddleLeft'
+  $msg.ForeColor = [System.Drawing.Color]::FromArgb(70,78,90)
+  $msg.Padding = New-Object System.Windows.Forms.Padding(10,0,0,0)
+  $root.Controls.Add($msg, 0, 4)
 
   # --- helpers ---
-  $log = { param($m) $out.AppendText([string]$m + "`r`n") }
+  $log = { param($m) $msg.Text = [string]$m }
   $saveCfg = { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
 
   function New-FolderNode([string]$path) {
@@ -768,37 +771,64 @@ function Show-Gui {
       while ($st.Count -gt 0) { $n = $st.Pop(); if ($n.Text -ne $placeholder) { $n.Checked = $checked }; foreach ($c in $n.Nodes) { $st.Push($c) } }
     } finally { $script:guiSuppress = $false }
   })
+  # touch: tapping anywhere on a row toggles its checkbox (except the expander/checkbox glyph)
+  $tree.Add_NodeMouseClick({
+    param($s,$e)
+    $hit = $tree.HitTest($e.Location)
+    if ($hit.Location -ne [System.Windows.Forms.TreeViewHitTestLocations]::StateImage -and
+        $hit.Location -ne [System.Windows.Forms.TreeViewHitTestLocations]::PlusMinus) {
+      $e.Node.Checked = -not $e.Node.Checked
+    }
+  })
   & $fillTree
 
-  # --- right-hand button column + toggles ---
+  # --- big toggle buttons (row 2) ---
+  $mkToggle = {
+    param($text, [bool]$checked)
+    $c = New-Object System.Windows.Forms.CheckBox
+    $c.Text = $text; $c.Appearance = 'Button'; $c.TextAlign = 'MiddleCenter'
+    $c.FlatStyle = 'Flat'; $c.Dock = 'Fill'; $c.Margin = New-Object System.Windows.Forms.Padding(6)
+    $c.Font = New-Object System.Drawing.Font('Segoe UI', 12)
+    $c.BackColor = $btnGrey; $c.ForeColor = $ink
+    $c.FlatAppearance.CheckedBackColor = $accent
+    $c.Checked = $checked
+    $c.Add_CheckedChanged({ if ($this.Checked) { $this.ForeColor = [System.Drawing.Color]::White } else { $this.ForeColor = $ink } })
+    if ($checked) { $c.ForeColor = [System.Drawing.Color]::White }
+    $c
+  }
+  $togRow = New-Object System.Windows.Forms.TableLayoutPanel
+  $togRow.Dock = 'Fill'; $togRow.ColumnCount = 2; $togRow.RowCount = 1
+  [void]$togRow.ColumnStyles.Add((& $colPct 50)); [void]$togRow.ColumnStyles.Add((& $colPct 50))
+  $cbRescan  = & $mkToggle 'Rescan all (ignore cache)' $false
+  $cbVerbose = & $mkToggle 'Verbose output' $true
+  $togRow.Controls.Add($cbRescan, 0, 0); $togRow.Controls.Add($cbVerbose, 1, 0)
+  $root.Controls.Add($togRow, 0, 2)
+
+  # --- action button grid (row 3): 4 columns x 2 rows of big buttons ---
   $mkBtn = {
-    param($text,$x,$y,$w,$h,[bool]$primary)
+    param($text, [bool]$primary)
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $text
-    $b.Location = New-Object System.Drawing.Point([int]$x,[int]$y)
-    $b.Size = New-Object System.Drawing.Size([int]$w,[int]$h)
     & $styleBtn $b $primary
-    $form.Controls.Add($b)
     $b
   }
-  $cx = 512; $cw = 272
-  $btnScan    = & $mkBtn 'Scan checked'         $cx  92 $cw 40 $true
-  $btnScanAll = & $mkBtn 'Scan all'             $cx 140 $cw 34 $false
-  $btnUpdate  = & $mkBtn 'Update definitions'   $cx 182 $cw 34 $false
-  $btnAdd     = & $mkBtn 'Add folder...'        $cx 230 $cw 32 $false
-  $btnRemove  = & $mkBtn 'Remove checked'       $cx 268 $cw 32 $false
-  $btnLogsDir = & $mkBtn 'Open logs folder'     $cx 312 $cw 32 $false
-  $btnViewLog = & $mkBtn 'View last log'        $cx 350 $cw 32 $false
-  $btnUpdApp  = & $mkBtn 'Update app (GitHub)'  $cx 392 $cw 32 $false
-
-  $cbRescan = New-Object System.Windows.Forms.CheckBox
-  $cbRescan.Text = 'Rescan all (ignore cache)'
-  $cbRescan.Location = New-Object System.Drawing.Point($cx,436); $cbRescan.AutoSize = $true
-  $form.Controls.Add($cbRescan)
-  $cbVerbose = New-Object System.Windows.Forms.CheckBox
-  $cbVerbose.Text = 'Verbose output'; $cbVerbose.Checked = $true
-  $cbVerbose.Location = New-Object System.Drawing.Point($cx,460); $cbVerbose.AutoSize = $true
-  $form.Controls.Add($cbVerbose)
+  $grid = New-Object System.Windows.Forms.TableLayoutPanel
+  $grid.Dock = 'Fill'; $grid.ColumnCount = 4; $grid.RowCount = 2
+  1..4 | ForEach-Object { [void]$grid.ColumnStyles.Add((& $colPct 25)) }
+  [void]$grid.RowStyles.Add((& $rowPct 50)); [void]$grid.RowStyles.Add((& $rowPct 50))
+  $btnScan    = & $mkBtn 'Scan checked' $true
+  $btnScanAll = & $mkBtn 'Scan all' $false
+  $btnUpdate  = & $mkBtn 'Update definitions' $false
+  $btnUpdApp  = & $mkBtn 'Update app (GitHub)' $false
+  $btnAdd     = & $mkBtn 'Add folder...' $false
+  $btnRemove  = & $mkBtn 'Remove checked' $false
+  $btnLogsDir = & $mkBtn 'Open logs folder' $false
+  $btnViewLog = & $mkBtn 'View last log' $false
+  $grid.Controls.Add($btnScan,0,0);    $grid.Controls.Add($btnScanAll,1,0)
+  $grid.Controls.Add($btnUpdate,2,0);  $grid.Controls.Add($btnUpdApp,3,0)
+  $grid.Controls.Add($btnAdd,0,1);     $grid.Controls.Add($btnRemove,1,1)
+  $grid.Controls.Add($btnLogsDir,2,1); $grid.Controls.Add($btnViewLog,3,1)
+  $root.Controls.Add($grid, 0, 3)
 
   # --- button handlers ---
   $btnScan.Add_Click({
@@ -826,7 +856,7 @@ function Show-Gui {
   $btnLogsDir.Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } else { & $log 'No logs yet.' } })
   $btnViewLog.Add_Click({
     $last = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($last) { $out.Text = (Get-Content $last.FullName -Raw) } else { & $log 'No logs yet.' }
+    if ($last) { Start-Process notepad.exe $last.FullName; & $log ("Opened: {0}" -f $last.Name) } else { & $log 'No logs yet.' }
   })
   $btnUpdApp.Add_Click({
     & $log 'Checking GitHub for the latest version...'

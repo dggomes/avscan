@@ -66,6 +66,10 @@ On first run (or `scan-av -Configure`) a wizard:
 
 ### The app (GUI)
 
+The app is **touch-first** (built for Windows gaming handhelds): it opens maximized
+with a large font, tall tap-anywhere tree rows, big toggle buttons, and a 4x2 grid
+of large action buttons — all in a responsive layout that scales to the screen.
+
 `-Install` puts a **Scan-AV** shortcut on your desktop that opens the app:
 
 - a **tree of your folders and sub-folders** with checkboxes — expand any folder and
