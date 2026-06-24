@@ -66,9 +66,11 @@ On first run (or `scan-av -Configure`) a wizard:
 
 ### The app (GUI)
 
-The app is **touch-first** (built for Windows gaming handhelds): it opens maximized
-with a large font, tall tap-anywhere tree rows, big toggle buttons, and a 4x2 grid
-of large action buttons — all in a responsive layout that scales to the screen.
+The app is a **premium, touch-first dashboard** (WPF) built for Windows gaming
+handhelds (ROG Ally, Legion Go, etc.) — dark theme, rounded cards, accent gradients,
+a left navigation rail, a hero protection-status card, expandable folder cards with
+large checkboxes, action tiles, and a status bar. It opens maximized and is designed
+for fingers, not a mouse.
 
 `-Install` puts a **Scan-AV** shortcut on your desktop that opens the app:
 

@@ -620,311 +620,405 @@ function Update-FromGitHub {
 # A WinForms app: pick folders (and sub-folders) to scan, add/remove them, update
 # definitions, view logs, and self-update from GitHub. Scanning is handed to the
 # console engine (a new powershell window) so the UI never freezes.
+# ================================================================ GUI helpers
+# Script-scoped so WPF event handlers can call them reliably regardless of closure
+# scope. Per-card handlers read the node from the element's .Tag (no closures).
+function script:WBrush([string]$hex) { (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
+
+function script:New-ModelNode([string]$path, [bool]$isFolder, [int]$depth) {
+  $hasKids = $false
+  if ($isFolder) { try { $hasKids = @(Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue | Select-Object -First 1).Count -gt 0 } catch {} }
+  [pscustomobject]@{ Path=$path; Name=(Split-Path $path -Leaf); IsFolder=$isFolder; HasChildren=$hasKids; Expanded=$false; Checked=$false; Loaded=$false; Children=@(); Depth=$depth }
+}
+function script:Load-ModelChildren($node) {
+  if ($node.Loaded) { return }
+  $kids = @()
+  try {
+    Get-ChildItem -LiteralPath $node.Path -Force -ErrorAction SilentlyContinue | Sort-Object @{e={-not $_.PSIsContainer}}, Name | ForEach-Object {
+      $kids += (New-ModelNode $_.FullName ([bool]$_.PSIsContainer) ($node.Depth + 1))
+    }
+  } catch {}
+  $node.Children = $kids; $node.Loaded = $true
+}
+function script:New-TargetCard($node) {
+  $card = New-Object System.Windows.Controls.Border
+  $card.Background = (WBrush '#10141E'); $card.CornerRadius = New-Object System.Windows.CornerRadius 14
+  $card.BorderBrush = (WBrush '#1A2130'); $card.BorderThickness = New-Object System.Windows.Thickness 1
+  $card.Margin = New-Object System.Windows.Thickness (($node.Depth * 26),0,0,8)
+  $card.Padding = New-Object System.Windows.Thickness 14,10,14,10
+  $card.MinHeight = 62; $card.Cursor = [System.Windows.Input.Cursors]::Hand; $card.Tag = $node
+
+  $g = New-Object System.Windows.Controls.Grid
+  $gAuto = [System.Windows.GridLength]::Auto
+  $gStar = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+  $c0 = New-Object System.Windows.Controls.ColumnDefinition; $c0.Width = $gAuto
+  $c1 = New-Object System.Windows.Controls.ColumnDefinition; $c1.Width = $gStar
+  $c2 = New-Object System.Windows.Controls.ColumnDefinition; $c2.Width = $gAuto
+  $g.ColumnDefinitions.Add($c0); $g.ColumnDefinitions.Add($c1); $g.ColumnDefinitions.Add($c2)
+
+  $chip = New-Object System.Windows.Controls.Border
+  $chip.Width = 40; $chip.Height = 40; $chip.CornerRadius = New-Object System.Windows.CornerRadius 10
+  $chip.Background = (WBrush '#1A2231'); $chip.Margin = New-Object System.Windows.Thickness 0,0,14,0
+  $gl = New-Object System.Windows.Controls.TextBlock
+  $gl.Text = [string]$(if ($node.IsFolder) { [char]0xE8B7 } else { [char]0xE8A5 })
+  $gl.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+  $gl.FontSize = 18; $gl.Foreground = (WBrush '#9AA6BC'); $gl.HorizontalAlignment = 'Center'; $gl.VerticalAlignment = 'Center'
+  $chip.Child = $gl
+  [System.Windows.Controls.Grid]::SetColumn($chip,0); [void]$g.Children.Add($chip)
+
+  $sp = New-Object System.Windows.Controls.StackPanel; $sp.VerticalAlignment = 'Center'
+  $t1 = New-Object System.Windows.Controls.TextBlock; $t1.Text = $node.Name; $t1.FontSize = 16; $t1.Foreground = (WBrush '#FFFFFF'); $t1.TextTrimming = 'CharacterEllipsis'
+  $sub = if ($node.IsFolder) { if ($node.Loaded) { "{0} items" -f $node.Children.Count } else { 'Folder' } } else { 'File' }
+  $t2 = New-Object System.Windows.Controls.TextBlock; $t2.Text = $sub; $t2.FontSize = 12; $t2.Foreground = (WBrush '#8A93A6'); $t2.Margin = New-Object System.Windows.Thickness 0,2,0,0
+  [void]$sp.Children.Add($t1); [void]$sp.Children.Add($t2)
+  [System.Windows.Controls.Grid]::SetColumn($sp,1); [void]$g.Children.Add($sp)
+
+  $tr = New-Object System.Windows.Controls.StackPanel; $tr.Orientation = 'Horizontal'; $tr.VerticalAlignment = 'Center'
+  if ($node.IsFolder -and $node.HasChildren) {
+    $chev = New-Object System.Windows.Controls.TextBlock
+    $chev.Text = [string]$(if ($node.Expanded) { [char]0xE70E } else { [char]0xE70D })
+    $chev.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+    $chev.FontSize = 16; $chev.Foreground = (WBrush '#8A93A6'); $chev.Margin = New-Object System.Windows.Thickness 0,0,14,0; $chev.VerticalAlignment = 'Center'
+    [void]$tr.Children.Add($chev)
+  }
+  $box = New-Object System.Windows.Controls.Border
+  $box.Width = 34; $box.Height = 34; $box.CornerRadius = New-Object System.Windows.CornerRadius 9; $box.VerticalAlignment = 'Center'; $box.Tag = $node
+  if ($node.Checked) {
+    $box.Background = (WBrush '#6D5BF0'); $box.BorderThickness = New-Object System.Windows.Thickness 0
+    $ck = New-Object System.Windows.Controls.TextBlock; $ck.Text = [string][char]0xE73E; $ck.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'; $ck.FontSize = 16; $ck.Foreground = (WBrush '#FFFFFF'); $ck.HorizontalAlignment='Center'; $ck.VerticalAlignment='Center'
+    $box.Child = $ck
+  } else {
+    $box.Background = (WBrush '#0C1018'); $box.BorderBrush = (WBrush '#39414F'); $box.BorderThickness = New-Object System.Windows.Thickness 2
+  }
+  [void]$tr.Children.Add($box)
+  [System.Windows.Controls.Grid]::SetColumn($tr,2); [void]$g.Children.Add($tr)
+  $card.Child = $g
+
+  $box.Add_MouseLeftButtonUp({ param($s,$e) $n = $s.Tag; $n.Checked = -not $n.Checked; $e.Handled = $true; Render-Targets })
+  $card.Add_MouseLeftButtonUp({
+    param($s,$e)
+    $n = $s.Tag
+    if ($n.IsFolder -and $n.HasChildren) {
+      if (-not $n.Expanded -and -not $n.Loaded) { Load-ModelChildren $n }
+      $n.Expanded = -not $n.Expanded
+    } else { $n.Checked = -not $n.Checked }
+    Render-Targets
+  })
+  return $card
+}
+function script:Emit-Node($node) {
+  [void]$script:TargetsPanel.Children.Add((New-TargetCard $node))
+  if ($node.Expanded) { foreach ($c in $node.Children) { Emit-Node $c } }
+}
+function script:Render-Targets {
+  if (-not $script:TargetsPanel) { return }
+  $script:TargetsPanel.Children.Clear()
+  foreach ($n in $script:rootNodes) { Emit-Node $n }
+}
+function script:Rebuild-Roots {
+  $script:rootNodes = @()
+  foreach ($f in @($script:guiCfg.scanFolders)) {
+    if (Test-Path $f) { $n = New-ModelNode $f $true 0; $n.Checked = $true; $script:rootNodes += $n }
+  }
+  Render-Targets
+}
+function script:Collect-Targets {
+  $acc = New-Object System.Collections.Generic.List[string]
+  function walk($n) { if ($n.Checked) { $acc.Add([string]$n.Path) }; foreach ($c in $n.Children) { walk $c } }
+  foreach ($n in $script:rootNodes) { walk $n }
+  $set = @($acc | Select-Object -Unique); $tops = @()
+  foreach ($p in $set) {
+    $cov = $false
+    foreach ($q in $set) { if ($q -ne $p -and $p.StartsWith($q + '\')) { $cov = $true; break } }
+    if (-not $cov) { $tops += $p }
+  }
+  ,$tops
+}
+function script:Save-GuiCfg { ($script:guiCfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
+
+# ================================================================ GUI window
 function Show-Gui {
+  Add-Type -AssemblyName PresentationFramework
+  Add-Type -AssemblyName PresentationCore
+  Add-Type -AssemblyName WindowsBase
   Add-Type -AssemblyName System.Windows.Forms
-  Add-Type -AssemblyName System.Drawing
   $cfg = Load-Config
   if (-not $cfg) {
     [System.Windows.Forms.MessageBox]::Show('No configuration found. Run "scan-av -Install" first.','scan-av') | Out-Null
     return
   }
+  $script:guiCfg = $cfg
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
-
-  $accent     = [System.Drawing.Color]::FromArgb(33,118,235)
-  $accentDark = [System.Drawing.Color]::FromArgb(22,92,194)
-  $panelBg    = [System.Drawing.Color]::FromArgb(245,247,250)
-  $btnGrey    = [System.Drawing.Color]::FromArgb(232,235,239)
-  $ink        = [System.Drawing.Color]::FromArgb(28,32,40)
-  $placeholder = '__loading__'
-  $script:guiSuppress = $false
-
-  $bigFont   = New-Object System.Drawing.Font('Segoe UI', 13)
-  $form = New-Object System.Windows.Forms.Form
-  $form.Text = 'scan-av'
-  $form.StartPosition = 'CenterScreen'
-  $form.AutoScaleMode = 'Font'
-  $form.Font = $bigFont
-  $form.BackColor = $panelBg
-  $form.MinimumSize = New-Object System.Drawing.Size(760,620)
-  $form.Size = New-Object System.Drawing.Size(1000,760)
-  $form.WindowState = 'Maximized'   # fill the handheld screen; still resizable
-
   $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
 
-  $styleBtn = {
-    param($b, [bool]$primary)
-    $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 0; $b.Cursor = 'Hand'
-    $b.Dock = 'Fill'; $b.Margin = New-Object System.Windows.Forms.Padding(6)
-    $b.Font = New-Object System.Drawing.Font('Segoe UI', 13)
-    if ($primary) { $b.BackColor = $accent; $b.ForeColor = [System.Drawing.Color]::White; $b.FlatAppearance.MouseOverBackColor = $accentDark }
-    else          { $b.BackColor = $btnGrey; $b.ForeColor = $ink }
-  }
-  $rowAbs = { param($v) New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]'Absolute', [single]$v) }
-  $rowPct = { param($v) New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]'Percent', [single]$v) }
-  $colPct = { param($v) New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]'Percent', [single]$v) }
+  $xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="scan-av" WindowState="Maximized" WindowStartupLocation="CenterScreen"
+        Background="#070910" FontFamily="Segoe UI" Foreground="#FFFFFF">
+  <Window.Resources>
+    <Style x:Key="Nav" TargetType="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#AEB6C6"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Margin" Value="10,4"/>
+      <Setter Property="Height" Value="68"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="14" Padding="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#141A28"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Tile" TargetType="Button">
+      <Setter Property="Background" Value="#11151F"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="18" Padding="18" BorderBrush="#1C2230" BorderThickness="1">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Primary" TargetType="Button">
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" CornerRadius="16" Padding="22,14">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                  <GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/>
+                </LinearGradientBrush>
+              </Border.Background>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.92"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Soft" TargetType="Button">
+      <Setter Property="Background" Value="#11151F"/>
+      <Setter Property="Foreground" Value="#C7CEDA"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="12" Padding="14,8" BorderBrush="#222A38" BorderThickness="1">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
 
-  # --- root layout: header / tree / toggles / buttons / message ---
-  $root = New-Object System.Windows.Forms.TableLayoutPanel
-  $root.Dock = 'Fill'; $root.ColumnCount = 1; $root.RowCount = 5
-  [void]$root.RowStyles.Add((& $rowAbs 76))
-  [void]$root.RowStyles.Add((& $rowPct 100))
-  [void]$root.RowStyles.Add((& $rowAbs 64))
-  [void]$root.RowStyles.Add((& $rowAbs 176))
-  [void]$root.RowStyles.Add((& $rowAbs 40))
-  $form.Controls.Add($root)
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="104"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
 
-  # header banner
-  $header = New-Object System.Windows.Forms.Panel
-  $header.Dock = 'Fill'; $header.BackColor = $accent
-  $root.Controls.Add($header, 0, 0)
-  $hTitle = New-Object System.Windows.Forms.Label
-  $hTitle.Text = 'scan-av'
-  $hTitle.ForeColor = [System.Drawing.Color]::White
-  $hTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 20, [System.Drawing.FontStyle]::Bold)
-  $hTitle.Location = New-Object System.Drawing.Point(18,8); $hTitle.AutoSize = $true
-  $header.Controls.Add($hTitle)
-  $hSub = New-Object System.Windows.Forms.Label
-  $hSub.Text = ("Engines: {0}{1}    Mode: {2}    Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'on'} else {'off'}))
-  $hSub.ForeColor = [System.Drawing.Color]::FromArgb(223,234,255)
-  $hSub.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-  $hSub.Location = New-Object System.Drawing.Point(20,46); $hSub.AutoSize = $true
-  $header.Controls.Add($hSub)
+    <Border Grid.Column="0" Background="#0B0E16">
+      <StackPanel Margin="0,18">
+        <Border Width="56" Height="56" CornerRadius="16" Margin="0,0,0,18" HorizontalAlignment="Center">
+          <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/></LinearGradientBrush></Border.Background>
+          <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <Button x:Name="NavDashboard" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Dashboard" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavScan" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Scan" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavProtection" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Protection" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavUpdates" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Updates" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavLogs" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Logs" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavSettings" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Settings" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <Button x:Name="NavAbout" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="About" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+      </StackPanel>
+    </Border>
 
-  # --- folder/sub-folder tree with BIG custom checkboxes (touch-friendly) ---
-  # Native TreeView checkboxes are ~13px and untappable on a handheld. Disable them
-  # and use a StateImageList of large 36px boxes (idx 1 = unchecked, 2 = checked);
-  # node.StateImageIndex carries the checked state.
-  $boxImgs = New-Object System.Windows.Forms.ImageList
-  $boxImgs.ImageSize = New-Object System.Drawing.Size(36,36)
-  $boxImgs.ColorDepth = 'Depth32Bit'
-  $mkBox = {
-    param([bool]$checked)
-    $bmp = New-Object System.Drawing.Bitmap 36,36
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = 'AntiAlias'
-    $g.Clear([System.Drawing.Color]::Transparent)
-    if ($checked) {
-      $br = New-Object System.Drawing.SolidBrush $accent
-      $g.FillRectangle($br, 5, 5, 26, 26); $br.Dispose()
-      $wp = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 3.5
-      $g.DrawLines($wp, [System.Drawing.Point[]]@((New-Object System.Drawing.Point 11,19),(New-Object System.Drawing.Point 16,24),(New-Object System.Drawing.Point 26,12)))
-      $wp.Dispose()
-    } else {
-      $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(120,128,140)), 2.5
-      $g.DrawRectangle($pen, 6, 6, 24, 24); $pen.Dispose()
-    }
-    $g.Dispose(); return $bmp
-  }
-  $boxImgs.Images.Add((New-Object System.Drawing.Bitmap 36,36))  # 0 = blank (no state)
-  $boxImgs.Images.Add((& $mkBox $false))                        # 1 = unchecked
-  $boxImgs.Images.Add((& $mkBox $true))                         # 2 = checked
+    <Grid Grid.Column="1" Margin="28,22,28,18">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
 
-  $tree = New-Object System.Windows.Forms.TreeView
-  $tree.Dock = 'Fill'
-  $tree.CheckBoxes = $false
-  $tree.StateImageList = $boxImgs
-  $tree.BorderStyle = 'FixedSingle'
-  $tree.BackColor = [System.Drawing.Color]::White
-  $tree.Font = New-Object System.Drawing.Font('Segoe UI', 14)
-  $tree.ItemHeight = 54
-  $tree.Indent = 40
-  $tree.ShowLines = $false
-  $tree.Margin = New-Object System.Windows.Forms.Padding(8,8,8,4)
-  $root.Controls.Add($tree, 0, 1)
+      <Grid Grid.Row="0" Margin="0,0,0,18">
+        <StackPanel HorizontalAlignment="Left">
+          <TextBlock Text="scan-av" FontSize="30" FontWeight="Bold"/>
+          <TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="BtnSettings" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Settings" FontSize="15"/></StackPanel></Button>
+          <Button x:Name="BtnMore" Style="{StaticResource Soft}"><TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="16"/></Button>
+        </StackPanel>
+      </Grid>
 
-  # message line (replaces the console box; scan output shows in its own window)
-  $msg = New-Object System.Windows.Forms.Label
-  $msg.Dock = 'Fill'; $msg.TextAlign = 'MiddleLeft'
-  $msg.ForeColor = [System.Drawing.Color]::FromArgb(70,78,90)
-  $msg.Padding = New-Object System.Windows.Forms.Padding(10,0,0,0)
-  $root.Controls.Add($msg, 0, 4)
+      <Border Grid.Row="1" CornerRadius="20" BorderBrush="#1F7A4D" BorderThickness="1.5" Margin="0,0,0,22">
+        <Border.Background>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#0C201A" Offset="0"/><GradientStop Color="#0A0F18" Offset="0.6"/></LinearGradientBrush>
+        </Border.Background>
+        <Grid Margin="26,22">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <Grid Grid.Column="0" Width="130" Height="130" Margin="0,0,28,0">
+            <Ellipse Stroke="#22C55E" StrokeThickness="7"/>
+            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="56" Foreground="#22C55E" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <TextBlock x:Name="HeroHeadline" Text="You're protected" FontSize="32" FontWeight="Bold"/>
+            <TextBlock x:Name="HeroSub" Text="No threats found. Your system is safe." FontSize="16" Foreground="#9BA3B4" Margin="0,6,0,0"/>
+            <TextBlock x:Name="HeroLast" Text="Last scan: Never" FontSize="14" Foreground="#6B7280" Margin="0,12,0,0"/>
+          </StackPanel>
+          <Button x:Name="ScanNow" Grid.Column="2" Style="{StaticResource Primary}" VerticalAlignment="Center">
+            <StackPanel>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xEA18;" FontFamily="Segoe MDL2 Assets" FontSize="20" Margin="0,0,8,0"/><TextBlock Text="Scan Now" FontSize="20" FontWeight="SemiBold"/></StackPanel>
+              <TextBlock Text="Quick Scan" FontSize="13" Foreground="#E5E0FF" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            </StackPanel>
+          </Button>
+        </Grid>
+      </Border>
 
-  # --- helpers ---
-  $log = { param($m) $msg.Text = [string]$m }
-  $saveCfg = { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
+      <Grid Grid.Row="2">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="380"/></Grid.ColumnDefinitions>
 
-  function New-FolderNode([string]$path) {
-    $n = New-Object System.Windows.Forms.TreeNode((Split-Path $path -Leaf))
-    $n.Tag = $path
-    $n.StateImageIndex = 1   # unchecked by default
-    try {
-      $sub = @(Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
-      if ($sub.Count -gt 0) { [void]$n.Nodes.Add($placeholder) }
-    } catch {}
-    return $n
+        <Grid Grid.Column="0" Margin="0,0,22,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Grid Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel HorizontalAlignment="Left">
+              <TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/>
+              <TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/>
+            </StackPanel>
+            <Button x:Name="BtnEdit" Style="{StaticResource Soft}" HorizontalAlignment="Right" VerticalAlignment="Top"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
+          </Grid>
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+            <StackPanel x:Name="TargetsPanel"/>
+          </ScrollViewer>
+        </Grid>
+
+        <Grid Grid.Column="1">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+          <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="0" Margin="0,0,8,8"><StackPanel><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Scan All" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Deep scan everything" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="1" Margin="8,0,0,8"><StackPanel><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Scan Checked" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Scan selected items" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="0" Margin="0,8,8,8"><StackPanel><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#54D98C"/><TextBlock Text="Update Definitions" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Update virus database" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="1" Margin="8,8,0,8"><StackPanel><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Update App" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Check for app updates" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileLogs" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="0" Margin="0,8,8,0"><StackPanel><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Open Logs" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="View scan logs" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileAdd" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="1" Margin="8,8,0,0"><StackPanel><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Add Folder" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Select folder to scan" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+        </Grid>
+      </Grid>
+
+      <Border Grid.Row="3" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Margin="0,18,0,0" Padding="18,12">
+        <Grid>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+            <TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <StackPanel>
+              <TextBlock Text="Real-time protection is active" FontSize="15" FontWeight="SemiBold"/>
+              <TextBlock Text="On-demand scanning - run a scan anytime" FontSize="12" Foreground="#8A93A6"/>
+            </StackPanel>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <TextBlock Text="&#xE701;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,18,0"/>
+            <TextBlock x:Name="StatusBattery" Text="&#xE83F;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,8,0"/>
+            <TextBlock x:Name="StatusTime" Text="" FontSize="15" Foreground="#C7CEDA"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>
+"@
+
+  try {
+    $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
+    $win = [Windows.Markup.XamlReader]::Load($reader)
+  } catch {
+    [System.Windows.Forms.MessageBox]::Show("Failed to build the UI: $_",'scan-av') | Out-Null
+    return
   }
-  # checked state lives in StateImageIndex: 1 = unchecked, 2 = checked
-  function Load-Children($node) {
-    if ($node.Nodes.Count -eq 1 -and $node.Nodes[0].Text -eq $placeholder) {
-      $node.Nodes.Clear()
-      try {
-        Get-ChildItem -LiteralPath ([string]$node.Tag) -Directory -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
-          $c = New-FolderNode $_.FullName; $c.StateImageIndex = $node.StateImageIndex; [void]$node.Nodes.Add($c)
-        }
-      } catch {}
-    }
-  }
-  $fillTree = {
-    $tree.Nodes.Clear()
-    foreach ($f in @($cfg.scanFolders)) {
-      if (Test-Path $f) { $n = New-FolderNode $f; $n.StateImageIndex = 2; [void]$tree.Nodes.Add($n) }
-      else { $n = New-Object System.Windows.Forms.TreeNode(("{0}  (missing)" -f $f)); $n.Tag = $f; $n.StateImageIndex = 1; [void]$tree.Nodes.Add($n) }
-    }
-  }
-  $setCheck = {
-    param($node, [int]$idx)
-    $st = New-Object System.Collections.Stack; $st.Push($node)
-    while ($st.Count -gt 0) {
-      $n = $st.Pop()
-      if ($n.Text -ne $placeholder) { $n.StateImageIndex = $idx }
-      foreach ($c in $n.Nodes) { $st.Push($c) }
-    }
-  }
-  $countChecked = {
-    $c = 0; $st = New-Object System.Collections.Stack
-    foreach ($n in $tree.Nodes) { $st.Push($n) }
-    while ($st.Count -gt 0) { $n = $st.Pop(); if ($n.StateImageIndex -eq 2) { $c++ }; foreach ($k in $n.Nodes) { $st.Push($k) } }
-    $c
-  }
-  $collectTargets = {
-    $res = New-Object System.Collections.ArrayList
-    $st  = New-Object System.Collections.Stack
-    foreach ($n in $tree.Nodes) { $st.Push($n) }
-    while ($st.Count -gt 0) {
-      $n = $st.Pop()
-      if ($n.Text -eq $placeholder) { continue }
-      if ($null -ne $n.Parent -and $n.Parent.StateImageIndex -eq 2) { continue }  # covered by checked ancestor
-      if ($n.StateImageIndex -eq 2 -and $n.Tag) { [void]$res.Add([string]$n.Tag); continue }  # topmost checked
-      foreach ($c in $n.Nodes) { $st.Push($c) }                    # unchecked -> descend
-    }
-    ,$res.ToArray()
-  }
-  # Launch the console scanner via -Command (not -File): -File can't bind a string[]
-  # array, and unquoted paths with spaces get split onto the wrong parameter. With
-  # -Command we pass a real PowerShell expression with a single-quoted path array.
+
+  $find = { param($n) $win.FindName($n) }
+  (& $find 'HeaderInfo').Text = ("Engine: {0}{1}   -   Mode: {2}   -   Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'On'} else {'Off'}))
+  try {
+    $lastLog = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($lastLog) { (& $find 'HeroLast').Text = "Last scan: " + $lastLog.LastWriteTime.ToString('ddd, HH:mm') }
+  } catch {}
+  try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
+
+  $script:TargetsPanel = (& $find 'TargetsPanel')
+  Rebuild-Roots
+
+  # console scanner launcher (paths single-quoted, via -Command)
   $launch = {
     param([string]$ParamExpr)
-    $extra = ''
-    if ($cbVerbose.Checked) { $extra += ' -Verbose' }
-    if ($cbRescan.Checked)  { $extra += ' -RescanAll' }
     $ps1q = $ps1 -replace "'", "''"
-    $cmd  = "& '$ps1q' $ParamExpr$extra"
+    $cmd  = "& '$ps1q' $ParamExpr -Verbose"
     Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"$cmd`"")
   }
-
-  $tree.Add_BeforeExpand({ param($s,$e) Load-Children $e.Node })
-  # touch interaction: tap the big box to (un)check; tap the name to expand/collapse
-  # (a leaf with no children toggles its check when tapped)
-  $tree.Add_NodeMouseClick({
-    param($s,$e)
-    $node = $e.Node
-    $hit = $tree.HitTest($e.Location)
-    if ($hit.Location -eq [System.Windows.Forms.TreeViewHitTestLocations]::StateImage) {
-      $idx = if ($node.StateImageIndex -eq 2) { 1 } else { 2 }; & $setCheck $node $idx
-    } elseif ($node.Nodes.Count -gt 0) {
-      $node.Toggle()
-    } else {
-      $idx = if ($node.StateImageIndex -eq 2) { 1 } else { 2 }; & $setCheck $node $idx
-    }
-    & $log ("{0} item(s) selected." -f (& $countChecked))
-  })
-  & $fillTree
-
-  # --- big toggle buttons (row 2) ---
-  $mkToggle = {
-    param($text, [bool]$checked)
-    $c = New-Object System.Windows.Forms.CheckBox
-    $c.Text = $text; $c.Appearance = 'Button'; $c.TextAlign = 'MiddleCenter'
-    $c.FlatStyle = 'Flat'; $c.Dock = 'Fill'; $c.Margin = New-Object System.Windows.Forms.Padding(6)
-    $c.Font = New-Object System.Drawing.Font('Segoe UI', 12)
-    $c.BackColor = $btnGrey; $c.ForeColor = $ink
-    $c.FlatAppearance.CheckedBackColor = $accent
-    $c.Checked = $checked
-    $c.Add_CheckedChanged({ if ($this.Checked) { $this.ForeColor = [System.Drawing.Color]::White } else { $this.ForeColor = $ink } })
-    if ($checked) { $c.ForeColor = [System.Drawing.Color]::White }
-    $c
-  }
-  $togRow = New-Object System.Windows.Forms.TableLayoutPanel
-  $togRow.Dock = 'Fill'; $togRow.ColumnCount = 2; $togRow.RowCount = 1
-  [void]$togRow.ColumnStyles.Add((& $colPct 50)); [void]$togRow.ColumnStyles.Add((& $colPct 50))
-  $cbRescan  = & $mkToggle 'Rescan all (ignore cache)' $false
-  $cbVerbose = & $mkToggle 'Verbose output' $true
-  $togRow.Controls.Add($cbRescan, 0, 0); $togRow.Controls.Add($cbVerbose, 1, 0)
-  $root.Controls.Add($togRow, 0, 2)
-
-  # --- action button grid (row 3): 4 columns x 2 rows of big buttons ---
-  $mkBtn = {
-    param($text, [bool]$primary)
-    $b = New-Object System.Windows.Forms.Button
-    $b.Text = $text
-    & $styleBtn $b $primary
-    $b
-  }
-  $grid = New-Object System.Windows.Forms.TableLayoutPanel
-  $grid.Dock = 'Fill'; $grid.ColumnCount = 4; $grid.RowCount = 2
-  1..4 | ForEach-Object { [void]$grid.ColumnStyles.Add((& $colPct 25)) }
-  [void]$grid.RowStyles.Add((& $rowPct 50)); [void]$grid.RowStyles.Add((& $rowPct 50))
-  $btnScan    = & $mkBtn 'Scan checked' $true
-  $btnScanAll = & $mkBtn 'Scan all' $false
-  $btnUpdate  = & $mkBtn 'Update definitions' $false
-  $btnUpdApp  = & $mkBtn 'Update app (GitHub)' $false
-  $btnAdd     = & $mkBtn 'Add folder...' $false
-  $btnRemove  = & $mkBtn 'Remove checked' $false
-  $btnLogsDir = & $mkBtn 'Open logs folder' $false
-  $btnViewLog = & $mkBtn 'View last log' $false
-  $grid.Controls.Add($btnScan,0,0);    $grid.Controls.Add($btnScanAll,1,0)
-  $grid.Controls.Add($btnUpdate,2,0);  $grid.Controls.Add($btnUpdApp,3,0)
-  $grid.Controls.Add($btnAdd,0,1);     $grid.Controls.Add($btnRemove,1,1)
-  $grid.Controls.Add($btnLogsDir,2,1); $grid.Controls.Add($btnViewLog,3,1)
-  $root.Controls.Add($grid, 0, 3)
-
-  # --- button handlers ---
-  $btnScan.Add_Click({
-    $sel = @(& $collectTargets)
-    if (-not $sel.Count) { & $log 'Nothing checked.'; return }
-    # build a single-quoted PowerShell array literal so spaces are preserved
+  $scanChecked = {
+    $sel = @(Collect-Targets)
+    if (-not $sel.Count) { [System.Windows.MessageBox]::Show('Nothing checked. Tick at least one item, or use Scan All.','scan-av') | Out-Null; return }
     $pathExpr = ($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
-    & $log ("Scanning {0} item(s) in a new window..." -f $sel.Count)
     & $launch ("-Path $pathExpr")
-  })
-  $btnScanAll.Add_Click({ & $log 'Scanning all configured folders...'; & $launch '' })
-  $btnUpdate.Add_Click({ & $log 'Updating definitions in a new window...'; & $launch '-Update' })
-  $btnAdd.Add_Click({
+  }
+  $doUpdateApp = {
+    $r = Update-FromGitHub
+    if ($r.ok) {
+      $a = [System.Windows.MessageBox]::Show("$($r.msg)`n`nRestart the app now?",'scan-av','YesNo','Question')
+      if ($a -eq 'Yes') { Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File', ('"{0}"' -f $ps1), '-Gui'); $win.Close() }
+    } else { [System.Windows.MessageBox]::Show($r.msg,'scan-av') | Out-Null }
+  }
+  $openCfg = { Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& '{0}' -Configure`"" -f ($ps1 -replace "'", "''")) }
+
+  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { & $launch '' } })
+  (& $find 'TileScanAll').Add_Click({ & $launch '' })
+  (& $find 'TileScanChecked').Add_Click({ & $scanChecked })
+  (& $find 'TileUpdateDefs').Add_Click({ & $launch '-Update' })
+  (& $find 'TileLogs').Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } })
+  (& $find 'TileUpdateApp').Add_Click($doUpdateApp)
+  (& $find 'TileAdd').Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
       $p = $dlg.SelectedPath
-      if (@($cfg.scanFolders) -notcontains $p) { $cfg.scanFolders = @(@($cfg.scanFolders) + $p); & $saveCfg; & $fillTree; & $log "Added: $p" }
-      else { & $log "Already present: $p" }
+      if (@($script:guiCfg.scanFolders) -notcontains $p) { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) + $p); Save-GuiCfg; Rebuild-Roots }
     }
   })
-  $btnRemove.Add_Click({
-    $tops = @($tree.Nodes | Where-Object { $_.StateImageIndex -eq 2 } | ForEach-Object { [string]$_.Tag })
-    if (-not $tops.Count) { & $log 'Check a top-level folder to remove it.'; return }
-    $cfg.scanFolders = @(@($cfg.scanFolders) | Where-Object { $tops -notcontains $_ })
-    & $saveCfg; & $fillTree; & $log ("Removed {0} folder(s) from the list." -f $tops.Count)
+  (& $find 'BtnEdit').Add_Click({
+    $tops = @($script:rootNodes | Where-Object { $_.Checked } | ForEach-Object { $_.Path })
+    if (-not $tops.Count) { [System.Windows.MessageBox]::Show('Check the top-level folder(s) to remove, then tap Edit.','scan-av') | Out-Null; return }
+    $a = [System.Windows.MessageBox]::Show(("Remove {0} folder(s) from the scan list?" -f $tops.Count),'scan-av','YesNo','Question')
+    if ($a -eq 'Yes') { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
   })
-  $btnLogsDir.Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } else { & $log 'No logs yet.' } })
-  $btnViewLog.Add_Click({
-    $last = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($last) { Start-Process notepad.exe $last.FullName; & $log ("Opened: {0}" -f $last.Name) } else { & $log 'No logs yet.' }
-  })
-  $btnUpdApp.Add_Click({
-    & $log 'Checking GitHub for the latest version...'
-    $r = Update-FromGitHub
-    & $log $r.msg
-    if ($r.ok) {
-      $ans = [System.Windows.Forms.MessageBox]::Show('Update applied. Restart the app now?','scan-av',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Question)
-      if ($ans -eq [System.Windows.Forms.DialogResult]::Yes) {
-        Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File', ('"{0}"' -f $ps1), '-Gui')
-        $form.Close()
-      }
-    }
-  })
+  (& $find 'NavScan').Add_Click({ & $scanChecked })
+  (& $find 'NavUpdates').Add_Click({ & $launch '-Update' })
+  (& $find 'NavLogs').Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } })
+  (& $find 'NavSettings').Add_Click($openCfg)
+  (& $find 'BtnSettings').Add_Click($openCfg)
+  (& $find 'BtnMore').Add_Click($doUpdateApp)
+  (& $find 'NavAbout').Add_Click({ [System.Windows.MessageBox]::Show("scan-av`nOn-demand malware scanner for handhelds.`nClamAV + Emsisoft.`ngithub.com/dggomes/avscan",'About scan-av') | Out-Null })
+  (& $find 'NavProtection').Add_Click({ [System.Windows.MessageBox]::Show('scan-av is an on-demand scanner. Run scans from the Dashboard; it does not replace always-on protection.','Protection') | Out-Null })
 
-  & $log 'Tap the box to select  -  tap the name to open sub-folders. Then "Scan checked".'
-  [void]$form.ShowDialog()
+  [void]$win.ShowDialog()
 }
-
 # ---------------------------------------------------------------- scan cache
 # Tracks already-scanned items so unchanged ones are skipped. Keyed by full path;
 # a "signature" of size+mtime (file) or count+size+newest-mtime (folder) detects
