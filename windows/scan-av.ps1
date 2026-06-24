@@ -467,11 +467,35 @@ function Run-ClamAV {
     Scanned = ([regex]::Match(($lines -join "`n"),'Scanned files:\s*(\d+)').Groups[1].Value) }
 }
 
+# a2cmd needs its path values quoted as /f="path". PowerShell's native-argument
+# passing won't reliably produce that for spaced paths (the value gets split and
+# a2cmd reports "no objects to scan"). Invoke it through ProcessStartInfo with an
+# explicit, correctly-quoted command line instead. Also avoids the stderr issue.
+function Invoke-A2cmd {
+  param([string]$Exe, [string]$Target, [string]$Log, [bool]$Live = $false)
+  $argStr = '/f="{0}" /s /a /pup /log="{1}" /loglevel=detailed' -f $Target, $Log
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $psi.Arguments = $argStr
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $console = Join-Path $LogDir '_a2cmd_console.txt'
+  try { $p = [System.Diagnostics.Process]::Start($psi) }
+  catch { "scan-av: failed to start a2cmd: $_" | Out-File $console -Encoding UTF8; return 999 }
+  $outT = $p.StandardOutput.ReadToEndAsync()   # async read avoids stdout/stderr deadlock
+  $errT = $p.StandardError.ReadToEndAsync()
+  $p.WaitForExit()
+  $txt = ($outT.Result + "`r`n" + $errT.Result)
+  $txt | Out-File -FilePath $console -Encoding UTF8
+  if ($Live) { Write-Host $txt }
+  return $p.ExitCode
+}
+
 function Run-Emsisoft {
   param([string]$Target, [string]$Log, $Cfg)
-  # We scan an already-extracted folder, so simple recursive/all-files is enough.
-  $a = @("/f=$Target", '/s', '/a', '/pup', "/log=$Log", '/loglevel=detailed')
-  $rc = Invoke-Native -Exe $Cfg.tools.a2cmd -Arguments $a -Log (Join-Path $LogDir '_a2cmd_console.txt') -Live $script:LiveScan
+  $rc = Invoke-A2cmd -Exe $Cfg.tools.a2cmd -Target $Target -Log $Log -Live $script:LiveScan
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   # a2cmd detection lines contain 'detected:'; summary has 'Scanned'/'Detected'
   $hits = @($lines | Where-Object { $_ -match 'detected:' -and $_ -notmatch '^\s*Detected:' })
