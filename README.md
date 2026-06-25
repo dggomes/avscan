@@ -1,6 +1,6 @@
 # avscan
 
-**On-demand, multi-engine malware scanning for Windows** — scan folders, downloads, and large archives with two engines, working around the file-size limits that make a naive antivirus scan miss things.
+**On-demand, multi-engine malware scanning for Windows** — scan folders, downloads, and large archives with up to three engines (ClamAV, Emsisoft, Microsoft Defender), working around the file-size limits that make a naive antivirus scan miss things.
 
 It is **on-demand**: nothing runs in the background. You scan something once, when you choose to.
 
@@ -25,8 +25,13 @@ It also distinguishes a **real detection** from noise:
 
 | Platform | Tool | Engines |
 |----------|------|---------|
-| Windows | [`windows/scan-av.ps1`](windows/scan-av.ps1) | ClamAV + Emsisoft Emergency Kit |
+| Windows | [`windows/scan-av.ps1`](windows/scan-av.ps1) | ClamAV + Emsisoft Emergency Kit + Microsoft Defender |
 | macOS / Linux | [`macos/scan-archive`](macos/scan-archive) | ClamAV |
+
+Each engine is independently toggleable in **Settings**. Optionally, ClamAV can pull
+**third-party (SaneSecurity) signatures**, and when a **VirusTotal** API key is
+configured the SHA-256 of any flagged file is checked against VirusTotal's
+multi-engine database automatically.
 
 The Windows tool is both a **command-line scanner** and a **touch/controller-friendly desktop app** (WPF). The macOS/Linux tool is a small command-line script.
 
@@ -56,7 +61,7 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - **Scan Targets** as expandable cards with large checkboxes — pick whole folders or specific sub-folders; give folders custom display names.
 - Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder.
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
-- In-app **Settings** (engines, scan mode, size limits, auto-update, incremental) and a **log browser**.
+- In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
 
 ```powershell
 scan-av -Gui          # open the app from the command line
@@ -116,8 +121,10 @@ This project is a wrapper/UI around third-party scanning engines and tools. It d
 
 - **ClamAV** — open-source antivirus engine by **Cisco Talos**. Licensed under **GPLv2**. <https://www.clamav.net>
 - **Emsisoft Emergency Kit** (`a2cmd` command-line scanner) — by **Emsisoft**. **Free for private/personal use only**; commercial use requires a license. <https://www.emsisoft.com/en/emergency-kit/>
+- **Microsoft Defender** (`MpCmdRun.exe`) — the antivirus engine built into Windows; invoked in report-only mode. <https://www.microsoft.com>
+- **SaneSecurity** — optional third-party ClamAV signature databases. <https://sanesecurity.com>
+- **VirusTotal** — optional multi-engine hash lookup (requires a free API key, set in Settings). <https://www.virustotal.com>
 - **7-Zip** — by **Igor Pavlov**. Used for archive inspection/extraction. <https://www.7-zip.org>
-- **VirusTotal** — suggested as a multi-engine second-opinion service. <https://www.virustotal.com>
 
 Built with **PowerShell** and **WPF** (Windows) / Bash (macOS/Linux). You are responsible for complying with each engine's license, especially Emsisoft's private-use terms.
 
