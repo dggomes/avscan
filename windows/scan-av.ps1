@@ -760,6 +760,83 @@ function script:Collect-Targets {
 }
 function script:Save-GuiCfg { ($script:guiCfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
 
+# ---- in-app run: launch a scan-av operation hidden and stream its output to the
+# run panel (no separate console). Output is redirected to a temp file that a
+# DispatcherTimer (UI thread) tails - avoids cross-thread UI updates.
+$script:runTick = {
+  try {
+    if ($script:runOutFile -and (Test-Path $script:runOutFile)) {
+      $fs = [System.IO.File]::Open($script:runOutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+      [void]$fs.Seek($script:runPos, [System.IO.SeekOrigin]::Begin)
+      $sr = New-Object System.IO.StreamReader($fs)
+      $new = $sr.ReadToEnd(); $script:runPos = $fs.Position; $sr.Close(); $fs.Close()
+      if ($new) { $script:runBox.AppendText($new); $script:runBox.ScrollToEnd() }
+    }
+  } catch {}
+  if ($script:runProc -and $script:runProc.HasExited) {
+    if ($script:runTimer) { $script:runTimer.Stop() }
+    $script:runProgress.IsIndeterminate = $false; $script:runProgress.Visibility = 'Collapsed'
+    $script:runTitle.Text = 'Done'
+    $script:runBack.Content = 'Back to Dashboard'
+  }
+}
+function script:Start-InAppRun([string]$title, [string]$paramExpr) {
+  $tmp = Join-Path $env:TEMP ('scanav_run_' + [Guid]::NewGuid().ToString('N') + '.log')
+  Set-Content -Path $tmp -Value '' -Encoding UTF8
+  $script:runOutFile = $tmp; $script:runPos = 0
+  $script:runTitle.Text = $title
+  $script:runBox.Text = ''
+  if ($script:logListBorder) { $script:logListBorder.Visibility = 'Collapsed'; $script:logListCol.Width = New-Object System.Windows.GridLength(0) }
+  $script:runProgress.IsIndeterminate = $true; $script:runProgress.Visibility = 'Visible'
+  $script:runBack.Content = 'Hide'
+  $script:runView.Visibility = 'Visible'
+  $ps1q = $script:guiPs1 -replace "'", "''"; $tmpq = $tmp -replace "'", "''"
+  $cmd = "& '$ps1q' $paramExpr -NoElevate -Verbose *>&1 | Out-File -LiteralPath '$tmpq' -Encoding utf8"
+  $psArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$cmd`""
+  try { $script:runProc = Start-Process powershell.exe -ArgumentList $psArgs -WindowStyle Hidden -PassThru }
+  catch { $script:runProc = $null; $script:runBox.AppendText("Failed to start: $_") }
+  if (-not $script:runTimer) {
+    $script:runTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $script:runTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+    $script:runTimer.add_Tick($script:runTick)
+  }
+  $script:runTimer.Start()
+}
+function script:Load-LogIntoBox([string]$path) {
+  try { $script:runBox.Text = (Get-Content -LiteralPath $path -Raw -ErrorAction Stop) } catch { $script:runBox.Text = "Could not read log: $_" }
+  $script:runTitle.Text = "Log: " + (Split-Path $path -Leaf)
+  $script:runBox.ScrollToHome()
+}
+function script:New-LogButton($file) {
+  $b = New-Object System.Windows.Controls.Border
+  $b.Background = (WBrush '#10141E'); $b.CornerRadius = New-Object System.Windows.CornerRadius 10
+  $b.BorderBrush = (WBrush '#1A2130'); $b.BorderThickness = New-Object System.Windows.Thickness 1
+  $b.Margin = New-Object System.Windows.Thickness 0,0,0,8; $b.Padding = New-Object System.Windows.Thickness 12,8,12,8
+  $b.Cursor = [System.Windows.Input.Cursors]::Hand; $b.Tag = $file.FullName
+  $sp = New-Object System.Windows.Controls.StackPanel
+  $n = New-Object System.Windows.Controls.TextBlock; $n.Text = $file.Name; $n.FontSize = 13; $n.Foreground = (WBrush '#E7ECF3'); $n.TextTrimming = 'CharacterEllipsis'
+  $d = New-Object System.Windows.Controls.TextBlock; $d.Text = $file.LastWriteTime.ToString('yyyy-MM-dd HH:mm') + "   -   " + ('{0:N0} KB' -f ([math]::Max(1, $file.Length/1KB))); $d.FontSize = 11; $d.Foreground = (WBrush '#8A93A6'); $d.Margin = New-Object System.Windows.Thickness 0,2,0,0
+  [void]$sp.Children.Add($n); [void]$sp.Children.Add($d); $b.Child = $sp
+  $b.Add_MouseLeftButtonUp({ param($s,$e) Load-LogIntoBox ([string]$s.Tag) })
+  return $b
+}
+function script:Show-LogsInApp {
+  $script:runTitle.Text = 'Logs'
+  $script:runProgress.Visibility = 'Collapsed'
+  $script:runBack.Content = 'Back to Dashboard'
+  $script:logListBorder.Visibility = 'Visible'
+  $script:logListCol.Width = New-Object System.Windows.GridLength(300)
+  $script:logList.Children.Clear()
+  $files = @(Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+  if (-not $files.Count) {
+    $script:runBox.Text = 'No logs yet. Run a scan first.'
+  } else {
+    foreach ($f in $files) { [void]$script:logList.Children.Add((New-LogButton $f)) }
+    Load-LogIntoBox $files[0].FullName
+  }
+  $script:runView.Visibility = 'Visible'
+}
+
 # ================================================================ GUI window
 function Show-Gui {
   Add-Type -AssemblyName PresentationFramework
@@ -773,6 +850,7 @@ function Show-Gui {
   }
   $script:guiCfg = $cfg
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
+  $script:guiPs1 = $ps1
   $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
 
   $xaml = @"
@@ -782,93 +860,42 @@ function Show-Gui {
         Background="#070910" FontFamily="Segoe UI" Foreground="#FFFFFF">
   <Window.Resources>
     <Style x:Key="Nav" TargetType="Button">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#AEB6C6"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Margin" Value="10,4"/>
-      <Setter Property="Height" Value="68"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="14" Padding="6">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#141A28"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="#AEB6C6"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="Margin" Value="10,4"/><Setter Property="Height" Value="68"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="14" Padding="6"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+        <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#141A28"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
     </Style>
     <Style x:Key="Tile" TargetType="Button">
-      <Setter Property="Background" Value="#11151F"/>
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="18" Padding="18" BorderBrush="#1C2230" BorderThickness="1">
-              <ContentPresenter/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
+      <Setter Property="Background" Value="#11151F"/><Setter Property="Foreground" Value="#FFFFFF"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="18" Padding="14" BorderBrush="#1C2230" BorderThickness="1"><ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/></Border>
+        <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
     </Style>
     <Style x:Key="Primary" TargetType="Button">
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="b" CornerRadius="16" Padding="22,14">
-              <Border.Background>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                  <GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/>
-                </LinearGradientBrush>
-              </Border.Background>
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.92"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
+      <Setter Property="Foreground" Value="#FFFFFF"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+        <Border x:Name="b" CornerRadius="16" Padding="22,14"><Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/></LinearGradientBrush></Border.Background><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+        <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.92"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
     </Style>
     <Style x:Key="Soft" TargetType="Button">
-      <Setter Property="Background" Value="#11151F"/>
-      <Setter Property="Foreground" Value="#C7CEDA"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="12" Padding="14,8" BorderBrush="#222A38" BorderThickness="1">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
+      <Setter Property="Background" Value="#11151F"/><Setter Property="Foreground" Value="#C7CEDA"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="12" Padding="14,8" BorderBrush="#222A38" BorderThickness="1"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+        <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
     </Style>
   </Window.Resources>
 
   <Grid>
-    <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="104"/>
-      <ColumnDefinition Width="*"/>
-    </Grid.ColumnDefinitions>
+    <Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 
     <Border Grid.Column="0" Background="#0B0E16">
       <StackPanel Margin="0,18">
-        <Border Width="56" Height="56" CornerRadius="16" Margin="0,0,0,18" HorizontalAlignment="Center">
-          <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/></LinearGradientBrush></Border.Background>
-          <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Border>
+        <Border Width="56" Height="56" CornerRadius="16" Margin="0,0,0,18" HorizontalAlignment="Center"><Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/></LinearGradientBrush></Border.Background><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
         <Button x:Name="NavDashboard" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Dashboard" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavScan" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Scan" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavProtection" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Protection" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
@@ -880,44 +907,28 @@ function Show-Gui {
     </Border>
 
     <Grid Grid.Column="1" Margin="28,22,28,18">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="*"/>
-        <RowDefinition Height="Auto"/>
-      </Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
       <Grid Grid.Row="0" Margin="0,0,0,18">
-        <StackPanel HorizontalAlignment="Left">
-          <TextBlock Text="scan-av" FontSize="30" FontWeight="Bold"/>
-          <TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/>
-        </StackPanel>
+        <StackPanel HorizontalAlignment="Left"><TextBlock Text="scan-av" FontSize="30" FontWeight="Bold"/><TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/></StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button x:Name="BtnSettings" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Settings" FontSize="15"/></StackPanel></Button>
           <Button x:Name="BtnMore" Style="{StaticResource Soft}"><TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="16"/></Button>
         </StackPanel>
       </Grid>
 
-      <Border Grid.Row="1" CornerRadius="20" BorderBrush="#1F7A4D" BorderThickness="1.5" Margin="0,0,0,22">
-        <Border.Background>
-          <LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#0C201A" Offset="0"/><GradientStop Color="#0A0F18" Offset="0.6"/></LinearGradientBrush>
-        </Border.Background>
+      <Border Grid.Row="1" CornerRadius="20" BorderBrush="#3A3580" BorderThickness="1.5" Margin="0,0,0,22">
+        <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#141233" Offset="0"/><GradientStop Color="#0A0F18" Offset="0.6"/></LinearGradientBrush></Border.Background>
         <Grid Margin="26,22">
           <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-          <Grid Grid.Column="0" Width="130" Height="130" Margin="0,0,28,0">
-            <Ellipse Stroke="#22C55E" StrokeThickness="7"/>
-            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="56" Foreground="#22C55E" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Grid>
+          <Grid Grid.Column="0" Width="130" Height="130" Margin="0,0,28,0"><Ellipse Stroke="#6D5BF0" StrokeThickness="7"/><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="52" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid>
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
-            <TextBlock x:Name="HeroHeadline" Text="You're protected" FontSize="32" FontWeight="Bold"/>
-            <TextBlock x:Name="HeroSub" Text="No threats found. Your system is safe." FontSize="16" Foreground="#9BA3B4" Margin="0,6,0,0"/>
+            <TextBlock x:Name="HeroHeadline" Text="Ready to scan" FontSize="32" FontWeight="Bold"/>
+            <TextBlock x:Name="HeroSub" Text="On-demand malware scanner. Run a scan to check your games and downloads." FontSize="16" Foreground="#9BA3B4" Margin="0,6,0,0" TextWrapping="Wrap"/>
             <TextBlock x:Name="HeroLast" Text="Last scan: Never" FontSize="14" Foreground="#6B7280" Margin="0,12,0,0"/>
           </StackPanel>
           <Button x:Name="ScanNow" Grid.Column="2" Style="{StaticResource Primary}" VerticalAlignment="Center">
-            <StackPanel>
-              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xEA18;" FontFamily="Segoe MDL2 Assets" FontSize="20" Margin="0,0,8,0"/><TextBlock Text="Scan Now" FontSize="20" FontWeight="SemiBold"/></StackPanel>
-              <TextBlock Text="Quick Scan" FontSize="13" Foreground="#E5E0FF" HorizontalAlignment="Center" Margin="0,4,0,0"/>
-            </StackPanel>
+            <StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Margin="0,0,8,0"/><TextBlock Text="Scan Now" FontSize="20" FontWeight="SemiBold"/></StackPanel><TextBlock Text="Quick Scan" FontSize="13" Foreground="#E5E0FF" HorizontalAlignment="Center" Margin="0,4,0,0"/></StackPanel>
           </Button>
         </Grid>
       </Border>
@@ -928,37 +939,48 @@ function Show-Gui {
         <Grid Grid.Column="0" Margin="0,0,22,0">
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
           <Grid Grid.Row="0" Margin="0,0,0,12">
-            <StackPanel HorizontalAlignment="Left">
-              <TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/>
-              <TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/>
-            </StackPanel>
+            <StackPanel HorizontalAlignment="Left"><TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/><TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel>
             <Button x:Name="BtnEdit" Style="{StaticResource Soft}" HorizontalAlignment="Right" VerticalAlignment="Top"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
           </Grid>
-          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
-            <StackPanel x:Name="TargetsPanel"/>
-          </ScrollViewer>
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="TargetsPanel"/></ScrollViewer>
         </Grid>
 
         <Grid Grid.Column="1">
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
           <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="0" Margin="0,0,8,8"><StackPanel><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Scan All" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Deep scan everything" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
-          <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="1" Margin="8,0,0,8"><StackPanel><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Scan Checked" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Scan selected items" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
-          <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="0" Margin="0,8,8,8"><StackPanel><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#54D98C"/><TextBlock Text="Update Definitions" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Update virus database" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
-          <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="1" Margin="8,8,0,8"><StackPanel><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Update App" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Check for app updates" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
-          <Button x:Name="TileLogs" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="0" Margin="0,8,8,0"><StackPanel><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Open Logs" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="View scan logs" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
-          <Button x:Name="TileAdd" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="1" Margin="8,8,0,0"><StackPanel><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="#8B8BF8"/><TextBlock Text="Add Folder" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0"/><TextBlock Text="Select folder to scan" FontSize="12" Foreground="#8A93A6" Margin="0,3,0,0"/></StackPanel></Button>
+          <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="0" Margin="0,0,8,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Scan All" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Deep scan everything" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
+          <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="1" Margin="8,0,0,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Scan Checked" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Scan selected items" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
+          <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="0" Margin="0,8,8,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#54D98C"/><TextBlock Text="Update Definitions" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Update virus database" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
+          <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="1" Margin="8,8,0,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Update App" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Check for updates" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
+          <Button x:Name="TileLogs" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="0" Margin="0,8,8,0"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="View Logs" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="See scan logs" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
+          <Button x:Name="TileAdd" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="1" Margin="8,8,0,0"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Add Folder" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Pick a folder" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
         </Grid>
+
+        <!-- in-app run / output / logs overlay -->
+        <Border x:Name="RunView" Grid.Column="0" Grid.ColumnSpan="2" Background="#070910" Visibility="Collapsed">
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <TextBlock x:Name="RunTitle" Grid.Row="0" Text="Scanning" FontSize="24" FontWeight="Bold"/>
+            <ProgressBar x:Name="RunProgress" Grid.Row="1" IsIndeterminate="True" Height="6" Margin="0,12,0,12" Background="#11151F" Foreground="#6D5BF0" BorderThickness="0"/>
+            <Grid Grid.Row="2">
+              <Grid.ColumnDefinitions><ColumnDefinition x:Name="LogListCol" Width="0"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Border x:Name="LogListBorder" Grid.Column="0" Margin="0,0,12,0" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="LogList"/></ScrollViewer>
+              </Border>
+              <Border Grid.Column="1" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="6">
+                <TextBox x:Name="RunBox" Background="Transparent" Foreground="#C7CEDA" BorderThickness="0" IsReadOnly="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+              </Border>
+            </Grid>
+            <Button x:Name="RunBack" Grid.Row="3" Style="{StaticResource Soft}" HorizontalAlignment="Left" Margin="0,14,0,0" Content="Back to Dashboard"/>
+          </Grid>
+        </Border>
       </Grid>
 
       <Border Grid.Row="3" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Margin="0,18,0,0" Padding="18,12">
         <Grid>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-            <TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" VerticalAlignment="Center" Margin="0,0,12,0"/>
-            <StackPanel>
-              <TextBlock Text="Real-time protection is active" FontSize="15" FontWeight="SemiBold"/>
-              <TextBlock Text="On-demand scanning - run a scan anytime" FontSize="12" Foreground="#8A93A6"/>
-            </StackPanel>
+            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <StackPanel><TextBlock Text="On-demand scanner" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="This app scans on demand - it does not provide always-on protection." FontSize="12" Foreground="#8A93A6"/></StackPanel>
           </StackPanel>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
             <TextBlock Text="&#xE701;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,18,0"/>
@@ -989,20 +1011,22 @@ function Show-Gui {
   try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
 
   $script:TargetsPanel = (& $find 'TargetsPanel')
+  $script:runView      = (& $find 'RunView')
+  $script:runTitle     = (& $find 'RunTitle')
+  $script:runProgress  = (& $find 'RunProgress')
+  $script:runBox       = (& $find 'RunBox')
+  $script:runBack      = (& $find 'RunBack')
+  $script:logListBorder = (& $find 'LogListBorder')
+  $script:logListCol    = (& $find 'LogListCol')
+  $script:logList       = (& $find 'LogList')
+  $script:runTimer    = $null; $script:runProc = $null
   Rebuild-Roots
 
-  # console scanner launcher (paths single-quoted, via -Command)
-  $launch = {
-    param([string]$ParamExpr)
-    $ps1q = $ps1 -replace "'", "''"
-    $cmd  = "& '$ps1q' $ParamExpr -Verbose"
-    Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"$cmd`"")
-  }
   $scanChecked = {
     $sel = @(Collect-Targets)
     if (-not $sel.Count) { [System.Windows.MessageBox]::Show('Nothing checked. Tick at least one item, or use Scan All.','scan-av') | Out-Null; return }
     $pathExpr = ($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
-    & $launch ("-Path $pathExpr")
+    Start-InAppRun 'Scanning selected items' ("-Path $pathExpr")
   }
   $doUpdateApp = {
     $r = Update-FromGitHub
@@ -1013,11 +1037,11 @@ function Show-Gui {
   }
   $openCfg = { Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& '{0}' -Configure`"" -f ($ps1 -replace "'", "''")) }
 
-  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { & $launch '' } })
-  (& $find 'TileScanAll').Add_Click({ & $launch '' })
+  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { Start-InAppRun 'Scanning all folders' '' } })
+  (& $find 'TileScanAll').Add_Click({ Start-InAppRun 'Scanning all folders' '' })
   (& $find 'TileScanChecked').Add_Click({ & $scanChecked })
-  (& $find 'TileUpdateDefs').Add_Click({ & $launch '-Update' })
-  (& $find 'TileLogs').Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } })
+  (& $find 'TileUpdateDefs').Add_Click({ Start-InAppRun 'Updating definitions' '-Update' })
+  (& $find 'TileLogs').Add_Click({ Show-LogsInApp })
   (& $find 'TileUpdateApp').Add_Click($doUpdateApp)
   (& $find 'TileAdd').Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1032,14 +1056,15 @@ function Show-Gui {
     $a = [System.Windows.MessageBox]::Show(("Remove {0} folder(s) from the scan list?" -f $tops.Count),'scan-av','YesNo','Question')
     if ($a -eq 'Yes') { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
   })
+  (& $find 'RunBack').Add_Click({ if ($script:runTimer) { $script:runTimer.Stop() }; $script:runView.Visibility = 'Collapsed' })
   (& $find 'NavScan').Add_Click({ & $scanChecked })
-  (& $find 'NavUpdates').Add_Click({ & $launch '-Update' })
-  (& $find 'NavLogs').Add_Click({ if (Test-Path $LogDir) { Start-Process explorer.exe $LogDir } })
+  (& $find 'NavUpdates').Add_Click({ Start-InAppRun 'Updating definitions' '-Update' })
+  (& $find 'NavLogs').Add_Click({ Show-LogsInApp })
   (& $find 'NavSettings').Add_Click($openCfg)
   (& $find 'BtnSettings').Add_Click($openCfg)
   (& $find 'BtnMore').Add_Click($doUpdateApp)
   (& $find 'NavAbout').Add_Click({ [System.Windows.MessageBox]::Show("scan-av`nOn-demand malware scanner for handhelds.`nClamAV + Emsisoft.`ngithub.com/dggomes/avscan",'About scan-av') | Out-Null })
-  (& $find 'NavProtection').Add_Click({ [System.Windows.MessageBox]::Show('scan-av is an on-demand scanner. Run scans from the Dashboard; it does not replace always-on protection.','Protection') | Out-Null })
+  (& $find 'NavProtection').Add_Click({ [System.Windows.MessageBox]::Show('scan-av is an on-demand scanner: it checks files when you run a scan. It does not provide always-on/real-time protection.','Protection') | Out-Null })
 
   [void]$win.ShowDialog()
 }

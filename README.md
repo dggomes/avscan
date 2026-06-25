@@ -90,8 +90,11 @@ scan-av -Gui          # open the app from the command line too
 scan-av -SelfUpdate   # update to the latest GitHub version from the CLI
 ```
 
-Scans launched from the app run in a separate console (with live output) so the
-window never freezes. Everything below also works from the command line.
+Operations run **inside the app**: scans and definition updates stream their live
+output into an in-app panel (no separate console window), and the **Logs** page is
+a browser of every past log — pick any one to read it in place. It's an on-demand
+scanner (clearly labelled as such — no false "real-time protection" claims).
+Everything below also works from the command line.
 
 ### Daily use
 
