@@ -983,6 +983,13 @@ function script:Collect-Targets {
   ,$tops
 }
 function script:Save-GuiCfg { ($script:guiCfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
+# Set a property if it exists, else add it. Avoids the pipe-to-Add-Member form,
+# which can behave differently when a NoteProperty already exists.
+function script:Set-CfgProp { param($Obj, [string]$Name, $Value)
+  if (-not $Obj) { return }
+  $p = $Obj.PSObject.Properties[$Name]
+  if ($p) { $p.Value = $Value } else { Add-Member -InputObject $Obj -NotePropertyName $Name -NotePropertyValue $Value -Force }
+}
 # custom display names per folder, stored in config.folderNames keyed by full path
 function script:Ensure-FolderNames {
   if (-not $script:guiCfg.PSObject.Properties['folderNames']) {
@@ -1422,6 +1429,7 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
 
   # ---- settings load/save ----
   $loadSettings = {
+   try {
     $o = $script:guiCfg
     (& $find 'SetClamAV').IsChecked    = [bool]$o.engines.clamav
     (& $find 'SetEmsisoft').IsChecked  = [bool]$o.engines.emsisoft
@@ -1436,25 +1444,32 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
     (& $find 'SetMaxScan').Text   = [string]$o.options.maxScanSizeMB
     (& $find 'SetUpdateAge').Text = [string]$(if ($o.options.updateMaxAgeHours) { $o.options.updateMaxAgeHours } else { 12 })
     (& $find 'SettingsMsg').Text = ''
+   } catch { [System.Windows.MessageBox]::Show("Could not load settings:`n$_",'scan-av') | Out-Null }
   }
   $saveSettings = {
-    $o = $script:guiCfg
-    $o.engines.clamav   = [bool](& $find 'SetClamAV').IsChecked
-    $o.engines.emsisoft = [bool](& $find 'SetEmsisoft').IsChecked
-    $o.engines   | Add-Member -NotePropertyName defender       -NotePropertyValue ([bool](& $find 'SetDefender').IsChecked)   -Force
-    $o.options   | Add-Member -NotePropertyName thirdPartySigs -NotePropertyValue ([bool](& $find 'SetThirdParty').IsChecked) -Force
-    $o.options   | Add-Member -NotePropertyName vtApiKey        -NotePropertyValue ([string](& $find 'SetVtKey').Text).Trim()  -Force
-    $o.options.incremental = [bool](& $find 'SetIncremental').IsChecked
-    $o.options.mode = $(if ((& $find 'SetModeFull').IsChecked) { 'full' } else { 'exec' })
-    $o.options.autoElevate = [bool](& $find 'SetAutoElevate').IsChecked
-    $o.options.autoUpdate  = [bool](& $find 'SetAutoUpdate').IsChecked
-    $mf = 0; if ([int]::TryParse((& $find 'SetMaxFile').Text, [ref]$mf) -and $mf -gt 0) { $o.options.maxFileSizeMB = $mf }
-    $ms = 0; if ([int]::TryParse((& $find 'SetMaxScan').Text, [ref]$ms) -and $ms -gt 0) { $o.options.maxScanSizeMB = $ms }
-    $ua = 0; if ([int]::TryParse((& $find 'SetUpdateAge').Text, [ref]$ua) -and $ua -ge 0) { $o.options.updateMaxAgeHours = $ua }
-    Save-GuiCfg
-    $incNow = [bool]$o.options.incremental
-    (& $find 'HeaderInfo').Text = ("Engine: {0}{1}{2}   -   Mode: {3}   -   Incremental: {4}" -f $(if ($o.engines.clamav) {'ClamAV '} else {''}), $(if ($o.engines.emsisoft) {'Emsisoft '} else {''}), $(if ([bool](& $find 'SetDefender').IsChecked) {'Defender'} else {''}), $o.options.mode, $(if ($incNow) {'On'} else {'Off'}))
-    (& $find 'SettingsMsg').Text = 'Saved.'
+    try {
+      $o = $script:guiCfg
+      Set-CfgProp $o.engines 'clamav'         ([bool](& $find 'SetClamAV').IsChecked)
+      Set-CfgProp $o.engines 'emsisoft'       ([bool](& $find 'SetEmsisoft').IsChecked)
+      Set-CfgProp $o.engines 'defender'       ([bool](& $find 'SetDefender').IsChecked)
+      Set-CfgProp $o.options 'thirdPartySigs' ([bool](& $find 'SetThirdParty').IsChecked)
+      Set-CfgProp $o.options 'vtApiKey'       (([string](& $find 'SetVtKey').Text).Trim())
+      Set-CfgProp $o.options 'incremental'    ([bool](& $find 'SetIncremental').IsChecked)
+      Set-CfgProp $o.options 'mode'           $(if ((& $find 'SetModeFull').IsChecked) { 'full' } else { 'exec' })
+      Set-CfgProp $o.options 'autoElevate'    ([bool](& $find 'SetAutoElevate').IsChecked)
+      Set-CfgProp $o.options 'autoUpdate'     ([bool](& $find 'SetAutoUpdate').IsChecked)
+      $mf = 0; if ([int]::TryParse((& $find 'SetMaxFile').Text, [ref]$mf) -and $mf -gt 0) { Set-CfgProp $o.options 'maxFileSizeMB' $mf }
+      $ms = 0; if ([int]::TryParse((& $find 'SetMaxScan').Text, [ref]$ms) -and $ms -gt 0) { Set-CfgProp $o.options 'maxScanSizeMB' $ms }
+      $ua = 0; if ([int]::TryParse((& $find 'SetUpdateAge').Text, [ref]$ua) -and $ua -ge 0) { Set-CfgProp $o.options 'updateMaxAgeHours' $ua }
+      Save-GuiCfg
+      $incNow = [bool]$o.options.incremental
+      $engStr = ((@($(if ($o.engines.clamav) {'ClamAV'}), $(if ($o.engines.emsisoft) {'Emsisoft'}), $(if ([bool](& $find 'SetDefender').IsChecked) {'Defender'})) | Where-Object { $_ }) -join ' ')
+      (& $find 'HeaderInfo').Text = ("Engine: {0}   -   Mode: {1}   -   Incremental: {2}" -f $engStr, $o.options.mode, $(if ($incNow) {'On'} else {'Off'}))
+      (& $find 'SettingsMsg').Text = 'Saved.'
+    } catch {
+      try { (& $find 'SettingsMsg').Text = 'Save failed.' } catch {}
+      [System.Windows.MessageBox]::Show("Could not save settings:`n$_",'scan-av') | Out-Null
+    }
   }
   & $loadSettings
 
