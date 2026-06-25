@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# scan-archive — antivirus-scan large game/software archives with ClamAV,
+# scan-archive — antivirus-scan large software archives and downloads with ClamAV,
 #                working around ClamAV's hard 2 GiB-per-file limit.
 #
 # What it does, for each archive you give it:
@@ -171,7 +171,7 @@ case "$OVERALL_RC" in
   *) echo "DONE — finished with warnings/errors." ;;
 esac
 echo
-echo "Reminder: ClamAV is signature-based. For cracked/repacked games, a clean"
-echo "result means 'no known signature matched' — upload the small crack .exe/.dll"
-echo "to VirusTotal for a 70-engine second opinion if you want more confidence."
+echo "Reminder: ClamAV is signature-based. For files from untrusted sources, a clean"
+echo "result means 'no known signature matched' — upload the small .exe/.dll to a"
+echo "multi-engine service such as VirusTotal for more confidence."
 exit "$OVERALL_RC"
