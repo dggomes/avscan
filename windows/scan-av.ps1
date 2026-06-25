@@ -63,10 +63,11 @@ param(
   [switch]$InstallContextMenu,
   [switch]$RemoveContextMenu,
   [switch]$NoPrompt,
+  [string]$ContextScan,
   [switch]$Help
 )
 
-$ScanAvVersion = '1.1.0'
+$ScanAvVersion = '1.1.1'
 $ScanAvBuild   = '2026-06-25'
 
 $ErrorActionPreference = 'Stop'
@@ -390,8 +391,9 @@ function Install-ContextMenu {
   if (-not (Test-Path $ps1)) { Warn "scan-av.ps1 not found in $AppDir - run -Install first."; return }
   $pw = Join-Path $PSHOME 'powershell.exe'
   $verb = 'AntivirusScan'; $label = 'Antivirus Scan'
-  $cmdSel = '"{0}" -NoProfile -ExecutionPolicy Bypass -NoExit -Command "& ''{1}'' -Path ''%1'' -RescanAll -Verbose"' -f $pw, $ps1
-  $cmdBg  = '"{0}" -NoProfile -ExecutionPolicy Bypass -NoExit -Command "& ''{1}'' -Path ''%V'' -RescanAll -Verbose"' -f $pw, $ps1
+  # launch hidden; scan-av -ContextScan then self-elevates into a visible window
+  $cmdSel = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" -ContextScan "%1"' -f $pw, $ps1
+  $cmdBg  = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" -ContextScan "%V"' -f $pw, $ps1
   $targets = @(
     @{ root = "HKCU:\Software\Classes\Directory\shell\$verb";            cmd = $cmdSel },  # folder selected
     @{ root = "HKCU:\Software\Classes\Directory\Background\shell\$verb";  cmd = $cmdBg  }   # inside a folder
@@ -1187,6 +1189,21 @@ if ($SelfUpdate)       { $r = Update-FromGitHub; if ($r.ok) { Ok $r.msg } else {
 if ($InstallContextMenu) { Install-ContextMenu; return }
 if ($RemoveContextMenu)  { Remove-ContextMenu; return }
 if ($Configure)        { Invoke-Configure | Out-Null; return }
+
+# Explorer right-click entry. Always run elevated: if not admin, relaunch this
+# scan into a visible elevated window (one UAC prompt); if admin, scan that folder
+# with default settings (incremental kept, shared cache) and no blocking prompt.
+if ($ContextScan) {
+  if (-not (Test-IsAdmin)) {
+    try {
+      $hostExe = (Get-Process -Id $PID).Path
+      $a = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File', ('"{0}"' -f $PSCommandPath), '-ContextScan', ('"{0}"' -f $ContextScan), '-Verbose')
+      Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $a
+    } catch { Bad "Elevation cancelled/failed: $_" }
+    return
+  }
+  $Path = @($ContextScan); $NoPrompt = $true   # admin: fall through to the scan flow
+}
 
 # manage the saved scan-folder list without re-running the whole wizard
 if ($AddFolder -or $RemoveFolder -or $ListFolders) {
