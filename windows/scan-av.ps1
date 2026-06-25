@@ -60,6 +60,8 @@ param(
   [switch]$ListFolders,
   [switch]$Gui,
   [switch]$SelfUpdate,
+  [switch]$InstallContextMenu,
+  [switch]$RemoveContextMenu,
   [switch]$Help
 )
 
@@ -375,6 +377,40 @@ function Register-NoPromptTask {
   }
 }
 
+# ---------------------------------------------------------------- explorer menu
+# Adds a per-user (HKCU, no admin) "Antivirus Scan" entry to the folder right-click
+# menu. Selecting a folder and clicking it scans just that folder. On Windows 11 it
+# appears under "Show more options".
+function Install-ContextMenu {
+  $ps1 = Join-Path $AppDir 'scan-av.ps1'
+  if (-not (Test-Path $ps1)) { Warn "scan-av.ps1 not found in $AppDir - run -Install first."; return }
+  $pw = Join-Path $PSHOME 'powershell.exe'
+  $verb = 'AntivirusScan'; $label = 'Antivirus Scan'
+  $cmdSel = '"{0}" -NoProfile -ExecutionPolicy Bypass -NoExit -Command "& ''{1}'' -Path ''%1'' -RescanAll -Verbose"' -f $pw, $ps1
+  $cmdBg  = '"{0}" -NoProfile -ExecutionPolicy Bypass -NoExit -Command "& ''{1}'' -Path ''%V'' -RescanAll -Verbose"' -f $pw, $ps1
+  $targets = @(
+    @{ root = "HKCU:\Software\Classes\Directory\shell\$verb";            cmd = $cmdSel },  # folder selected
+    @{ root = "HKCU:\Software\Classes\Directory\Background\shell\$verb";  cmd = $cmdBg  }   # inside a folder
+  )
+  foreach ($t in $targets) {
+    try {
+      New-Item -Path $t.root -Force | Out-Null
+      Set-ItemProperty -Path $t.root -Name '(Default)' -Value $label
+      Set-ItemProperty -Path $t.root -Name 'Icon' -Value $pw
+      New-Item -Path "$($t.root)\command" -Force | Out-Null
+      Set-ItemProperty -Path "$($t.root)\command" -Name '(Default)' -Value $t.cmd
+    } catch { Warn "  context-menu registry write failed: $_" }
+  }
+  Ok "Added 'Antivirus Scan' to the folder right-click menu."
+  Info "On Windows 11 it's under 'Show more options' (Shift+F10 shows it directly)."
+}
+function Remove-ContextMenu {
+  foreach ($r in @("HKCU:\Software\Classes\Directory\shell\AntivirusScan","HKCU:\Software\Classes\Directory\Background\shell\AntivirusScan")) {
+    if (Test-Path $r) { Remove-Item $r -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+  Ok "Removed the 'Antivirus Scan' right-click menu entry."
+}
+
 # ---------------------------------------------------------------- install
 function Invoke-Install {
   param([switch]$WithEngines)
@@ -421,6 +457,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
   # desktop shortcut (elevated, so Emsisoft doesn't prompt per scan)
   New-DesktopShortcut -Elevated $true
   Info "For ZERO UAC prompts, run PowerShell as Admin once: scan-av -NoPromptShortcut"
+  Write-Host ''
+  if (AskYesNo "Add 'Antivirus Scan' to the folder right-click menu?" $true) { Install-ContextMenu }
   Write-Host ''
   if ($WithEngines -or (AskYesNo 'Auto-download & install ClamAV + Emsisoft now?' $true)) {
     Install-Engines
@@ -1138,6 +1176,8 @@ if ($Shortcut)         { New-DesktopShortcut -Elevated $true; return }
 if ($NoPromptShortcut) { Register-NoPromptTask; return }
 if ($Gui)              { Show-Gui; return }
 if ($SelfUpdate)       { $r = Update-FromGitHub; if ($r.ok) { Ok $r.msg } else { Bad $r.msg }; return }
+if ($InstallContextMenu) { Install-ContextMenu; return }
+if ($RemoveContextMenu)  { Remove-ContextMenu; return }
 if ($Configure)        { Invoke-Configure | Out-Null; return }
 
 # manage the saved scan-folder list without re-running the whole wizard

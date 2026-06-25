@@ -118,6 +118,19 @@ scan-av -ListFolders                    # show the current list
 
 Per-scan logs land in `%LOCALAPPDATA%\ScanAV\logs`.
 
+### Explorer right-click "Antivirus Scan"
+
+Add a folder right-click menu entry that scans just that folder:
+
+```powershell
+scan-av -InstallContextMenu   # add it (per-user, no admin)
+scan-av -RemoveContextMenu    # remove it
+```
+
+`-Install` offers to add it too. Right-click a folder (or inside one) -> **Antivirus
+Scan** runs a scan of that folder with your configured engines/mode. On Windows 11
+it's under **"Show more options"**.
+
 ### Auto-updating definitions
 
 By default (you're asked during setup) scan-av **refreshes ClamAV + Emsisoft
