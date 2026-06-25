@@ -67,7 +67,7 @@ param(
   [switch]$Help
 )
 
-$ScanAvVersion = '1.1.1'
+$ScanAvVersion = '1.2.0'
 $ScanAvBuild   = '2026-06-25'
 
 $ErrorActionPreference = 'Stop'
@@ -848,7 +848,7 @@ function script:Start-InAppRun([string]$title, [string]$paramExpr) {
   $script:runProgress.IsIndeterminate = $true; $script:runProgress.Visibility = 'Visible'
   $script:runBack.Content = 'Hide'
   if ($script:runCancel) { $script:runCancel.Visibility = 'Visible' }
-  $script:runView.Visibility = 'Visible'
+  Show-Page 'Scan'
   $ps1q = $script:guiPs1 -replace "'", "''"; $tmpq = $tmp -replace "'", "''"
   $cmd = "& '$ps1q' $paramExpr -NoElevate -NoPrompt -Verbose *>&1 | Out-File -LiteralPath '$tmpq' -Encoding utf8"
   $psArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$cmd`""
@@ -894,7 +894,12 @@ function script:Show-LogsInApp {
     foreach ($f in $files) { [void]$script:logList.Children.Add((New-LogButton $f)) }
     Load-LogIntoBox $files[0].FullName
   }
-  $script:runView.Visibility = 'Visible'
+  Show-Page 'Scan'
+}
+function script:Show-Page([string]$name) {
+  $pages = @{ Dashboard = $script:pageDashboard; Scan = $script:pageScan; Settings = $script:pageSettings; About = $script:pageAbout }
+  foreach ($k in @($pages.Keys)) { if ($pages[$k]) { $pages[$k].Visibility = $(if ($k -eq $name) { 'Visible' } else { 'Collapsed' }) } }
+  if ($script:navButtons) { foreach ($e in $script:navButtons.GetEnumerator()) { try { $e.Value.Tag = $(if ($e.Key -eq $name) { 'sel' } else { '' }) } catch {} } }
 }
 
 # ================================================================ GUI window
@@ -911,27 +916,30 @@ function Show-Gui {
   $script:guiCfg = $cfg
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
   $script:guiPs1 = $ps1
-  try { Install-ContextMenu | Out-Null } catch {}   # ensure the folder right-click entry exists
+  try { Install-ContextMenu | Out-Null } catch {}
   $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
 
   $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="scan-av" WindowState="Maximized" WindowStartupLocation="CenterScreen"
+        Title="Antivirus Scan" WindowState="Maximized" WindowStartupLocation="CenterScreen"
         Background="#070910" FontFamily="Segoe UI" Foreground="#FFFFFF">
   <Window.Resources>
     <Style x:Key="Nav" TargetType="Button">
       <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="#AEB6C6"/>
-      <Setter Property="Cursor" Value="Hand"/><Setter Property="Margin" Value="10,4"/><Setter Property="Height" Value="68"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="Margin" Value="10,4"/><Setter Property="Height" Value="66"/>
       <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
         <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="14" Padding="6"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-        <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#141A28"/></Trigger></ControlTemplate.Triggers>
+        <ControlTemplate.Triggers>
+          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#141A28"/></Trigger>
+          <Trigger Property="Tag" Value="sel"><Setter TargetName="b" Property="Background" Value="#1C2742"/><Setter Property="Foreground" Value="#FFFFFF"/></Trigger>
+        </ControlTemplate.Triggers>
       </ControlTemplate></Setter.Value></Setter>
     </Style>
     <Style x:Key="Tile" TargetType="Button">
       <Setter Property="Background" Value="#11151F"/><Setter Property="Foreground" Value="#FFFFFF"/><Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="18" Padding="14" BorderBrush="#1C2230" BorderThickness="1"><ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/></Border>
+        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="16" Padding="14" BorderBrush="#1C2230" BorderThickness="1"><ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/></Border>
         <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#19202E"/></Trigger></ControlTemplate.Triggers>
       </ControlTemplate></Setter.Value></Setter>
     </Style>
@@ -959,18 +967,17 @@ function Show-Gui {
         <Border Width="56" Height="56" CornerRadius="16" Margin="0,0,0,18" HorizontalAlignment="Center"><Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#6D5BF0" Offset="0"/><GradientStop Color="#8B5CF6" Offset="1"/></LinearGradientBrush></Border.Background><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
         <Button x:Name="NavDashboard" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Dashboard" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavScan" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Scan" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
-        <Button x:Name="NavProtection" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Protection" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavUpdates" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Updates" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavLogs" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Logs" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavSettings" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Settings" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavAbout" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="About" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
-        <TextBlock x:Name="VerLabel" Text="" FontSize="11" Foreground="#5A6270" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+        <TextBlock x:Name="VerLabel" Text="" FontSize="11" Foreground="#5A6270" HorizontalAlignment="Center" Margin="0,14,0,0"/>
         <TextBlock x:Name="BuildLabel" Text="" FontSize="9" Foreground="#454C5A" HorizontalAlignment="Center" Margin="0,2,0,0"/>
       </StackPanel>
     </Border>
 
     <Grid Grid.Column="1" Margin="28,22,28,18">
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
       <Grid Grid.Row="0" Margin="0,0,0,18">
         <StackPanel HorizontalAlignment="Left"><TextBlock Text="Antivirus Scan - Downloaded Files" FontSize="24" FontWeight="Bold"/><TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/></StackPanel>
@@ -980,79 +987,129 @@ function Show-Gui {
         </StackPanel>
       </Grid>
 
-      <Border Grid.Row="1" CornerRadius="20" BorderBrush="#3A3580" BorderThickness="1.5" Margin="0,0,0,22">
-        <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#141233" Offset="0"/><GradientStop Color="#0A0F18" Offset="0.6"/></LinearGradientBrush></Border.Background>
-        <Grid Margin="26,22">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-          <Grid Grid.Column="0" Width="130" Height="130" Margin="0,0,28,0"><Ellipse Stroke="#6D5BF0" StrokeThickness="7"/><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="52" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid>
-          <StackPanel Grid.Column="1" VerticalAlignment="Center">
-            <TextBlock x:Name="HeroHeadline" Text="Ready to scan" FontSize="32" FontWeight="Bold"/>
-            <TextBlock x:Name="HeroSub" Text="On-demand malware scanner. Run a scan to check your games and downloads." FontSize="16" Foreground="#9BA3B4" Margin="0,6,0,0" TextWrapping="Wrap"/>
-            <TextBlock x:Name="HeroLast" Text="Last scan: Never" FontSize="14" Foreground="#6B7280" Margin="0,12,0,0"/>
-          </StackPanel>
-          <Button x:Name="ScanNow" Grid.Column="2" Style="{StaticResource Primary}" VerticalAlignment="Center">
-            <StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Margin="0,0,8,0"/><TextBlock Text="Scan Now" FontSize="20" FontWeight="SemiBold"/></StackPanel><TextBlock Text="Quick Scan" FontSize="13" Foreground="#E5E0FF" HorizontalAlignment="Center" Margin="0,4,0,0"/></StackPanel>
-          </Button>
-        </Grid>
-      </Border>
-
-      <Grid Grid.Row="2">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="380"/></Grid.ColumnDefinitions>
-
-        <Grid Grid.Column="0" Margin="0,0,22,0">
+      <Grid Grid.Row="1">
+        <!-- ===================== DASHBOARD PAGE ===================== -->
+        <Grid x:Name="PageDashboard">
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <Grid Grid.Row="0" Margin="0,0,0,12">
-            <StackPanel HorizontalAlignment="Left"><TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/><TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel>
-            <Button x:Name="BtnEdit" Style="{StaticResource Soft}" HorizontalAlignment="Right" VerticalAlignment="Top"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
+          <Border Grid.Row="0" CornerRadius="20" BorderBrush="#3A3580" BorderThickness="1.5" Margin="0,0,0,22">
+            <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#141233" Offset="0"/><GradientStop Color="#0A0F18" Offset="0.6"/></LinearGradientBrush></Border.Background>
+            <Grid Margin="26,22">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Grid Grid.Column="0" Width="120" Height="120" Margin="0,0,28,0"><Ellipse Stroke="#6D5BF0" StrokeThickness="7"/><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="48" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="Ready to scan" FontSize="30" FontWeight="Bold"/>
+                <TextBlock Text="On-demand malware scanner. Run a scan to check your games and downloads." FontSize="15" Foreground="#9BA3B4" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="HeroLast" Text="Last scan: Never" FontSize="13" Foreground="#6B7280" Margin="0,10,0,0"/>
+              </StackPanel>
+              <Button x:Name="ScanNow" Grid.Column="2" Style="{StaticResource Primary}" VerticalAlignment="Center">
+                <StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Margin="0,0,8,0"/><TextBlock Text="Scan Now" FontSize="20" FontWeight="SemiBold"/></StackPanel><TextBlock Text="Incremental" FontSize="13" Foreground="#E5E0FF" HorizontalAlignment="Center" Margin="0,4,0,0"/></StackPanel>
+              </Button>
+            </Grid>
+          </Border>
+          <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="360"/></Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" Margin="0,0,22,0">
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+              <Grid Grid.Row="0" Margin="0,0,0,12">
+                <StackPanel HorizontalAlignment="Left"><TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/><TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel>
+                <Button x:Name="BtnEdit" Style="{StaticResource Soft}" HorizontalAlignment="Right" VerticalAlignment="Top"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
+              </Grid>
+              <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="TargetsPanel"/></ScrollViewer>
+            </Grid>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+              <StackPanel>
+                <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="58"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan All" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Full or incremental" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+                <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="58"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan Checked" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Selected items" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+                <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="58"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#54D98C" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Update Definitions" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Virus database" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+                <Button x:Name="TileLogs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="58"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="View Logs" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Browse scan logs" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+                <Button x:Name="TileAdd" Style="{StaticResource Tile}" Margin="0,0,0,0" MinHeight="58"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Add Folder" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Pick a folder to scan" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+              </StackPanel>
+            </ScrollViewer>
           </Grid>
-          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="TargetsPanel"/></ScrollViewer>
         </Grid>
 
-        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
-          <StackPanel>
-            <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan All" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Deep scan everything" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
-            <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan Checked" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Scan selected items" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
-            <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#54D98C" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Update Definitions" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Update virus database" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
-            <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Update App" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Check for updates" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
-            <Button x:Name="TileLogs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="View Logs" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Browse scan logs" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
-            <Button x:Name="TileAdd" Style="{StaticResource Tile}" Margin="0,0,0,0" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Add Folder" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Pick a folder to scan" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+        <!-- ===================== SCAN PAGE ===================== -->
+        <Grid x:Name="PageScan" Visibility="Collapsed">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <TextBlock x:Name="RunTitle" Grid.Row="0" Text="Scan" FontSize="24" FontWeight="Bold"/>
+          <ProgressBar x:Name="RunProgress" Grid.Row="1" IsIndeterminate="True" Height="6" Margin="0,12,0,12" Background="#11151F" Foreground="#6D5BF0" BorderThickness="0" Visibility="Collapsed"/>
+          <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions><ColumnDefinition x:Name="LogListCol" Width="0"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border x:Name="LogListBorder" Grid.Column="0" Margin="0,0,12,0" Visibility="Collapsed"><ScrollViewer VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="LogList"/></ScrollViewer></Border>
+            <Border Grid.Column="1" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="6"><TextBox x:Name="RunBox" Background="Transparent" Foreground="#C7CEDA" BorderThickness="0" IsReadOnly="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/></Border>
+          </Grid>
+          <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0">
+            <Button x:Name="RunBack" Style="{StaticResource Soft}" Content="Back to Dashboard"/>
+            <Button x:Name="RunCancel" Style="{StaticResource Soft}" Content="Cancel" Margin="10,0,0,0" Visibility="Collapsed"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- ===================== SETTINGS PAGE ===================== -->
+        <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+          <StackPanel MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock Text="Settings" FontSize="24" FontWeight="Bold" Margin="0,0,0,16"/>
+            <Border CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="20" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="Engines" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                <CheckBox x:Name="SetClamAV" Content="ClamAV" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+                <CheckBox x:Name="SetEmsisoft" Content="Emsisoft" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+              </StackPanel>
+            </Border>
+            <Border CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="20" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="Scanning" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                <CheckBox x:Name="SetIncremental" Content="Incremental (skip unchanged files)" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+                <CheckBox x:Name="SetModeFull" Content="Full archive contents (slower; off = executables only)" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+                <CheckBox x:Name="SetAutoElevate" Content="Auto-elevate for Emsisoft (run scans as admin)" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+                <Grid Margin="0,10,0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions><TextBlock Grid.Column="0" Text="ClamAV max file size (MB)" FontSize="15" VerticalAlignment="Center"/><TextBox x:Name="SetMaxFile" Grid.Column="1" FontSize="15" Padding="8,6" Background="#11151F" Foreground="#FFFFFF" BorderBrush="#222A38"/></Grid>
+                <Grid Margin="0,8,0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions><TextBlock Grid.Column="0" Text="ClamAV max scan size (MB)" FontSize="15" VerticalAlignment="Center"/><TextBox x:Name="SetMaxScan" Grid.Column="1" FontSize="15" Padding="8,6" Background="#11151F" Foreground="#FFFFFF" BorderBrush="#222A38"/></Grid>
+              </StackPanel>
+            </Border>
+            <Border CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="20" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="Updates" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                <CheckBox x:Name="SetAutoUpdate" Content="Auto-update definitions before scanning" FontSize="15" Margin="0,6"><CheckBox.LayoutTransform><ScaleTransform ScaleX="1.3" ScaleY="1.3"/></CheckBox.LayoutTransform></CheckBox>
+                <Grid Margin="0,10,0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions><TextBlock Grid.Column="0" Text="Only if older than (hours)" FontSize="15" VerticalAlignment="Center"/><TextBox x:Name="SetUpdateAge" Grid.Column="1" FontSize="15" Padding="8,6" Background="#11151F" Foreground="#FFFFFF" BorderBrush="#222A38"/></Grid>
+              </StackPanel>
+            </Border>
+            <StackPanel Orientation="Horizontal" Margin="0,4,0,20">
+              <Button x:Name="BtnSaveSettings" Style="{StaticResource Primary}" Content="Save settings"/>
+              <Button x:Name="BtnReloadSettings" Style="{StaticResource Soft}" Content="Reload" Margin="12,0,0,0"/>
+              <TextBlock x:Name="SettingsMsg" VerticalAlignment="Center" Margin="14,0,0,0" Foreground="#54D98C" FontSize="14"/>
+            </StackPanel>
           </StackPanel>
         </ScrollViewer>
 
-        <!-- in-app run / output / logs overlay -->
-        <Border x:Name="RunView" Grid.Column="0" Grid.ColumnSpan="2" Background="#070910" Visibility="Collapsed">
-          <Grid>
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <TextBlock x:Name="RunTitle" Grid.Row="0" Text="Scanning" FontSize="24" FontWeight="Bold"/>
-            <ProgressBar x:Name="RunProgress" Grid.Row="1" IsIndeterminate="True" Height="6" Margin="0,12,0,12" Background="#11151F" Foreground="#6D5BF0" BorderThickness="0"/>
-            <Grid Grid.Row="2">
-              <Grid.ColumnDefinitions><ColumnDefinition x:Name="LogListCol" Width="0"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Border x:Name="LogListBorder" Grid.Column="0" Margin="0,0,12,0" Visibility="Collapsed">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="LogList"/></ScrollViewer>
-              </Border>
-              <Border Grid.Column="1" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="6">
-                <TextBox x:Name="RunBox" Background="Transparent" Foreground="#C7CEDA" BorderThickness="0" IsReadOnly="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
-              </Border>
-            </Grid>
-            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0">
-              <Button x:Name="RunBack" Style="{StaticResource Soft}" Content="Back to Dashboard"/>
-              <Button x:Name="RunCancel" Style="{StaticResource Soft}" Content="Cancel" Margin="10,0,0,0" Visibility="Collapsed"/>
-            </StackPanel>
-          </Grid>
-        </Border>
+        <!-- ===================== ABOUT PAGE ===================== -->
+        <ScrollViewer x:Name="PageAbout" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+          <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="About" FontSize="24" FontWeight="Bold" Margin="0,0,0,16"/>
+            <Border CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Padding="22">
+              <StackPanel>
+                <TextBlock Text="Antivirus Scan - Downloaded Files" FontSize="20" FontWeight="Bold"/>
+                <TextBlock x:Name="AboutVersion" Text="" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,14"/>
+                <TextBlock TextWrapping="Wrap" FontSize="15" Foreground="#C7CEDA" Text="An on-demand malware scanner for Windows gaming handhelds. It scans downloaded games and files with two engines and works around scanner size limits by extracting and checking the executable surface of large archives. It does not provide always-on/real-time protection."/>
+                <TextBlock Text="Repository" FontSize="15" FontWeight="SemiBold" Margin="0,16,0,2"/>
+                <TextBlock FontSize="15"><Hyperlink x:Name="RepoLink" NavigateUri="https://github.com/dggomes/avscan" Foreground="#8B8BF8">github.com/dggomes/avscan</Hyperlink></TextBlock>
+                <TextBlock Text="Author" FontSize="15" FontWeight="SemiBold" Margin="0,16,0,2"/>
+                <TextBlock Text="dggomes" FontSize="15" Foreground="#C7CEDA"/>
+                <TextBlock Text="License" FontSize="15" FontWeight="SemiBold" Margin="0,16,0,2"/>
+                <TextBlock Text="MIT - provided as-is, no warranty." FontSize="15" Foreground="#C7CEDA"/>
+                <TextBlock Text="Attribution" FontSize="15" FontWeight="SemiBold" Margin="0,16,0,2"/>
+                <TextBlock TextWrapping="Wrap" FontSize="15" Foreground="#C7CEDA" Text="ClamAV (Cisco Talos, GPLv2) - signature scanning engine."/>
+                <TextBlock TextWrapping="Wrap" FontSize="15" Foreground="#C7CEDA" Text="Emsisoft Emergency Kit / a2cmd - free for private/personal use only."/>
+                <TextBlock TextWrapping="Wrap" FontSize="15" Foreground="#C7CEDA" Text="7-Zip (Igor Pavlov) - archive extraction."/>
+                <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="#6B7280" Margin="0,16,0,0" Text="Signature scanning is not proof of safety. For cracked/repacked content, verify suspicious files on VirusTotal."/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
       </Grid>
 
-      <Border Grid.Row="3" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Margin="0,18,0,0" Padding="18,12">
+      <Border Grid.Row="2" CornerRadius="14" Background="#0B0F18" BorderBrush="#1A2130" BorderThickness="1" Margin="0,18,0,0" Padding="18,12">
         <Grid>
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" VerticalAlignment="Center" Margin="0,0,12,0"/>
-            <StackPanel><TextBlock Text="On-demand scanner" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="This app scans on demand - it does not provide always-on protection." FontSize="12" Foreground="#8A93A6"/></StackPanel>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-            <TextBlock Text="&#xE701;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,18,0"/>
-            <TextBlock x:Name="StatusBattery" Text="&#xE83F;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,8,0"/>
-            <TextBlock x:Name="StatusTime" Text="" FontSize="15" Foreground="#C7CEDA"/>
-          </StackPanel>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" VerticalAlignment="Center" Margin="0,0,12,0"/><StackPanel><TextBlock Text="On-demand scanner" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="This app scans on demand - it does not provide always-on protection." FontSize="12" Foreground="#8A93A6"/></StackPanel></StackPanel>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="&#xE701;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,18,0"/><TextBlock Text="&#xE83F;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#9BA3B4" Margin="0,0,8,0"/><TextBlock x:Name="StatusTime" Text="" FontSize="15" Foreground="#C7CEDA"/></StackPanel>
         </Grid>
       </Border>
     </Grid>
@@ -1067,37 +1124,91 @@ function Show-Gui {
     [System.Windows.Forms.MessageBox]::Show("Failed to build the UI: $_",'scan-av') | Out-Null
     return
   }
-
   $find = { param($n) $win.FindName($n) }
-  (& $find 'HeaderInfo').Text = ("Engine: {0}{1}   -   Mode: {2}   -   Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'On'} else {'Off'}))
-  try {
-    $lastLog = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($lastLog) { (& $find 'HeroLast').Text = "Last scan: " + $lastLog.LastWriteTime.ToString('ddd, HH:mm') }
-  } catch {}
-  try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
-  try { (& $find 'VerLabel').Text = "v$ScanAvVersion"; (& $find 'BuildLabel').Text = "Build $ScanAvBuild" } catch {}
 
+  # page + nav refs
+  $script:pageDashboard = (& $find 'PageDashboard'); $script:pageScan = (& $find 'PageScan')
+  $script:pageSettings  = (& $find 'PageSettings');  $script:pageAbout = (& $find 'PageAbout')
+  $script:navButtons = @{ Dashboard=(& $find 'NavDashboard'); Scan=(& $find 'NavScan'); Updates=(& $find 'NavUpdates'); Logs=(& $find 'NavLogs'); Settings=(& $find 'NavSettings'); About=(& $find 'NavAbout') }
+
+  # run / log refs
+  $script:runTitle = (& $find 'RunTitle'); $script:runProgress = (& $find 'RunProgress')
+  $script:runBox = (& $find 'RunBox'); $script:runBack = (& $find 'RunBack'); $script:runCancel = (& $find 'RunCancel')
+  $script:logListBorder = (& $find 'LogListBorder'); $script:logListCol = (& $find 'LogListCol'); $script:logList = (& $find 'LogList')
   $script:TargetsPanel = (& $find 'TargetsPanel')
-  $script:runView      = (& $find 'RunView')
-  $script:runTitle     = (& $find 'RunTitle')
-  $script:runProgress  = (& $find 'RunProgress')
-  $script:runBox       = (& $find 'RunBox')
-  $script:runBack      = (& $find 'RunBack')
-  $script:runCancel    = (& $find 'RunCancel')
-  $script:logListBorder = (& $find 'LogListBorder')
-  $script:logListCol    = (& $find 'LogListCol')
-  $script:logList       = (& $find 'LogList')
-  $script:runTimer    = $null; $script:runProc = $null
-  Rebuild-Roots
+  $script:runTimer = $null; $script:runProc = $null
 
+  (& $find 'HeaderInfo').Text = ("Engine: {0}{1}   -   Mode: {2}   -   Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'On'} else {'Off'}))
+  try { $lastLog = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($lastLog) { (& $find 'HeroLast').Text = "Last scan: " + $lastLog.LastWriteTime.ToString('ddd, HH:mm') } } catch {}
+  try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
+  try { (& $find 'VerLabel').Text = "v$ScanAvVersion"; (& $find 'BuildLabel').Text = "Build $ScanAvBuild"; (& $find 'AboutVersion').Text = "Version $ScanAvVersion   -   Build $ScanAvBuild" } catch {}
+  Rebuild-Roots
+  Show-Page 'Dashboard'
+
+  # ---- settings load/save ----
+  $loadSettings = {
+    $o = $script:guiCfg
+    (& $find 'SetClamAV').IsChecked    = [bool]$o.engines.clamav
+    (& $find 'SetEmsisoft').IsChecked  = [bool]$o.engines.emsisoft
+    (& $find 'SetIncremental').IsChecked = $(if ($null -ne $o.options.incremental) { [bool]$o.options.incremental } else { $true })
+    (& $find 'SetModeFull').IsChecked  = ($o.options.mode -eq 'full')
+    (& $find 'SetAutoElevate').IsChecked = $(if ($null -ne $o.options.autoElevate) { [bool]$o.options.autoElevate } else { $true })
+    (& $find 'SetAutoUpdate').IsChecked = $(if ($null -ne $o.options.autoUpdate) { [bool]$o.options.autoUpdate } else { $true })
+    (& $find 'SetMaxFile').Text   = [string]$o.options.maxFileSizeMB
+    (& $find 'SetMaxScan').Text   = [string]$o.options.maxScanSizeMB
+    (& $find 'SetUpdateAge').Text = [string]$(if ($o.options.updateMaxAgeHours) { $o.options.updateMaxAgeHours } else { 12 })
+    (& $find 'SettingsMsg').Text = ''
+  }
+  $saveSettings = {
+    $o = $script:guiCfg
+    $o.engines.clamav   = [bool](& $find 'SetClamAV').IsChecked
+    $o.engines.emsisoft = [bool](& $find 'SetEmsisoft').IsChecked
+    $o.options.incremental = [bool](& $find 'SetIncremental').IsChecked
+    $o.options.mode = $(if ((& $find 'SetModeFull').IsChecked) { 'full' } else { 'exec' })
+    $o.options.autoElevate = [bool](& $find 'SetAutoElevate').IsChecked
+    $o.options.autoUpdate  = [bool](& $find 'SetAutoUpdate').IsChecked
+    $mf = 0; if ([int]::TryParse((& $find 'SetMaxFile').Text, [ref]$mf) -and $mf -gt 0) { $o.options.maxFileSizeMB = $mf }
+    $ms = 0; if ([int]::TryParse((& $find 'SetMaxScan').Text, [ref]$ms) -and $ms -gt 0) { $o.options.maxScanSizeMB = $ms }
+    $ua = 0; if ([int]::TryParse((& $find 'SetUpdateAge').Text, [ref]$ua) -and $ua -ge 0) { $o.options.updateMaxAgeHours = $ua }
+    Save-GuiCfg
+    $incNow = [bool]$o.options.incremental
+    (& $find 'HeaderInfo').Text = ("Engine: {0}{1}   -   Mode: {2}   -   Incremental: {3}" -f $(if ($o.engines.clamav) {'ClamAV '} else {''}), $(if ($o.engines.emsisoft) {'Emsisoft'} else {''}), $o.options.mode, $(if ($incNow) {'On'} else {'Off'}))
+    (& $find 'SettingsMsg').Text = 'Saved.'
+  }
+  & $loadSettings
+
+  # ---- actions ----
   $confirm = { param($msg) (([System.Windows.MessageBox]::Show($msg,'scan-av','YesNo','Question')) -eq 'Yes') }
+  $askScanType = {
+    # returns 'full', 'inc', or $null (cancel)
+    $r = [System.Windows.MessageBox]::Show("Scan type:`n`nYes = Full (re-scan everything)`nNo = Incremental (only new/changed)",'Scan type','YesNoCancel','Question')
+    if ($r -eq 'Yes') { 'full' } elseif ($r -eq 'No') { 'inc' } else { $null }
+  }
+  $runScan = { param([string]$title, [string]$pathExpr, [bool]$full)
+    $extra = if ($full) { ' -RescanAll' } else { '' }
+    Start-InAppRun $title ("$pathExpr$extra")
+  }
   $scanChecked = {
     $sel = @(Collect-Targets)
     if (-not $sel.Count) { [System.Windows.MessageBox]::Show('Nothing checked. Tick at least one item, or use Scan All.','scan-av') | Out-Null; return }
-    if (-not (& $confirm ("Scan {0} selected item(s) now?" -f $sel.Count))) { return }
-    $pathExpr = ($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
-    Start-InAppRun 'Scanning selected items' ("-Path $pathExpr")
+    $t = & $askScanType; if (-not $t) { return }
+    $pathExpr = '-Path ' + (($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ',')
+    & $runScan ("Scanning {0} selected item(s)" -f $sel.Count) $pathExpr ($t -eq 'full')
   }
+  $scanAll = {
+    $t = & $askScanType; if (-not $t) { return }
+    & $runScan 'Scanning all folders' '' ($t -eq 'full')
+  }
+  $scanNow = {
+    # Scan Now = incremental on the checked items (or all if none checked)
+    $sel = @(Collect-Targets)
+    if (-not (& $confirm 'Run an incremental scan now?')) { return }
+    if ($sel.Count) {
+      $pathExpr = '-Path ' + (($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ',')
+      & $runScan ("Scanning {0} item(s) (incremental)" -f $sel.Count) $pathExpr $false
+    } else { & $runScan 'Scanning all folders (incremental)' '' $false }
+  }
+  $updateDefs = { if (& $confirm 'Update virus definitions now? This downloads from ClamAV and Emsisoft.') { Start-InAppRun 'Updating definitions' '-Update' } }
   $doUpdateApp = {
     if (-not (& $confirm 'Check GitHub and download the latest app version?')) { return }
     $r = Update-FromGitHub
@@ -1106,16 +1217,16 @@ function Show-Gui {
       if ($a -eq 'Yes') { Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File', ('"{0}"' -f $ps1), '-Gui'); $win.Close() }
     } else { [System.Windows.MessageBox]::Show($r.msg,'scan-av') | Out-Null }
   }
-  $openCfg = { Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& '{0}' -Configure`"" -f ($ps1 -replace "'", "''")) }
+  $showScanPage = {
+    if (-not ($script:runProc -or $script:runBox.Text)) { $script:runTitle.Text = 'Scan'; $script:runProgress.Visibility = 'Collapsed'; $script:runBox.Text = 'No scan running. Start one from the Dashboard.' }
+    Show-Page 'Scan'
+  }
 
-  $scanAll = { if (& $confirm 'Scan ALL configured folders now? This can take a while.') { Start-InAppRun 'Scanning all folders' '' } }
-  $updateDefs = { if (& $confirm 'Update virus definitions now? This downloads from ClamAV and Emsisoft.') { Start-InAppRun 'Updating definitions' '-Update' } }
-  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { & $scanAll } })
+  (& $find 'ScanNow').Add_Click($scanNow)
   (& $find 'TileScanAll').Add_Click($scanAll)
-  (& $find 'TileScanChecked').Add_Click({ & $scanChecked })
+  (& $find 'TileScanChecked').Add_Click($scanChecked)
   (& $find 'TileUpdateDefs').Add_Click($updateDefs)
   (& $find 'TileLogs').Add_Click({ Show-LogsInApp })
-  (& $find 'TileUpdateApp').Add_Click($doUpdateApp)
   (& $find 'TileAdd').Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -1126,20 +1237,21 @@ function Show-Gui {
   (& $find 'BtnEdit').Add_Click({
     $tops = @($script:rootNodes | Where-Object { $_.Checked } | ForEach-Object { $_.Path })
     if (-not $tops.Count) { [System.Windows.MessageBox]::Show('Check the top-level folder(s) to remove, then tap Edit.','scan-av') | Out-Null; return }
-    $a = [System.Windows.MessageBox]::Show(("Remove {0} folder(s) from the scan list?" -f $tops.Count),'scan-av','YesNo','Question')
-    if ($a -eq 'Yes') { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
+    if (& $confirm ("Remove {0} folder(s) from the scan list?" -f $tops.Count)) { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
   })
-  (& $find 'RunBack').Add_Click({ if ($script:runTimer) { $script:runTimer.Stop() }; $script:runView.Visibility = 'Collapsed' })
+  (& $find 'RunBack').Add_Click({ Show-Page 'Dashboard' })
   (& $find 'RunCancel').Add_Click({ if (& $confirm 'Cancel the running operation?') { Stop-InAppRun } })
-  (& $find 'NavDashboard').Add_Click({ $script:runView.Visibility = 'Collapsed' })
-  (& $find 'NavScan').Add_Click({ & $scanChecked })
+  (& $find 'NavDashboard').Add_Click({ Show-Page 'Dashboard' })
+  (& $find 'NavScan').Add_Click($showScanPage)
   (& $find 'NavUpdates').Add_Click($updateDefs)
   (& $find 'NavLogs').Add_Click({ Show-LogsInApp })
-  (& $find 'NavSettings').Add_Click($openCfg)
-  (& $find 'BtnSettings').Add_Click($openCfg)
+  (& $find 'NavSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
+  (& $find 'NavAbout').Add_Click({ Show-Page 'About' })
+  (& $find 'BtnSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
   (& $find 'BtnMore').Add_Click($doUpdateApp)
-  (& $find 'NavAbout').Add_Click({ [System.Windows.MessageBox]::Show("scan-av`nOn-demand malware scanner for handhelds.`nClamAV + Emsisoft.`ngithub.com/dggomes/avscan",'About scan-av') | Out-Null })
-  (& $find 'NavProtection').Add_Click({ [System.Windows.MessageBox]::Show('scan-av is an on-demand scanner: it checks files when you run a scan. It does not provide always-on/real-time protection.','Protection') | Out-Null })
+  (& $find 'BtnSaveSettings').Add_Click($saveSettings)
+  (& $find 'BtnReloadSettings').Add_Click($loadSettings)
+  (& $find 'RepoLink').Add_RequestNavigate({ param($s,$e) try { Start-Process $e.Uri.AbsoluteUri } catch {}; $e.Handled = $true })
 
   [void]$win.ShowDialog()
 }
