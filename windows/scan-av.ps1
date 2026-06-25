@@ -1828,11 +1828,17 @@ foreach ($t in $targets) {
     $kids = @(Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue)
     $subDirs = @($kids | Where-Object { $_.PSIsContainer })
     $looseFiles = @($kids | Where-Object { -not $_.PSIsContainer })
-    if ($subDirs.Count -gt 0 -and $looseFiles.Count -le 3) {
-      $subDirs    | ForEach-Object { $units += $_.FullName }   # per-folder (per-item) units
-      $looseFiles | ForEach-Object { $units += $_.FullName }   # a few stray files
+    # A LIBRARY folder (more sub-folders than stray files - e.g. a "Games" parent) is
+    # expanded so each sub-folder is its own cache unit: a NEW sub-folder is then a
+    # fresh unit that always gets scanned, never hidden inside the parent's single
+    # cache entry. A CONTENT folder (a game: few sub-folders, many loose exe/dll
+    # files) is scanned as ONE recursive unit - avoids the per-file clamscan
+    # DB-reload storm.
+    if ($subDirs.Count -gt 0 -and $subDirs.Count -ge $looseFiles.Count) {
+      $subDirs    | ForEach-Object { $units += $_.FullName }   # each sub-folder = own unit
+      $looseFiles | ForEach-Object { $units += $_.FullName }   # stray files (few in a library)
     } else {
-      $units += $t   # loose-file folder -> scan the whole thing once
+      $units += $t   # content folder -> scan the whole thing once
     }
   } else { $units += $t }
 }
