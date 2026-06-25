@@ -995,6 +995,22 @@ function script:Restore-TargetState($state) {
   }
   foreach ($n in @($script:rootNodes)) { walk $n }
 }
+# A cheap fingerprint of the sub-folder names visible in the tree right now: each
+# configured root plus any expanded folder. Changes when a sub-folder is added or
+# removed on disk, which the folder-watch timer uses to auto-refresh.
+function script:Get-VisibleFingerprint {
+  $sb = New-Object System.Text.StringBuilder
+  function fp($path) {
+    try {
+      $names = @(Get-ChildItem -LiteralPath $path -Force -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object) -join '|'
+      [void]$sb.Append($path).Append('=').Append($names).Append(';')
+    } catch {}
+  }
+  function walk($n) { if ($n.IsFolder -and $n.Expanded) { fp $n.Path }; foreach ($c in $n.Children) { walk $c } }
+  foreach ($f in @($script:guiCfg.scanFolders)) { fp $f }                 # roots (even if collapsed)
+  foreach ($n in @($script:rootNodes)) { walk $n }                        # expanded sub-folders
+  return $sb.ToString()
+}
 # Re-enumerate the scan folders from disk, preserving expand/check state. Safe to
 # call repeatedly (debounced on window activation).
 function script:Refresh-Targets {
@@ -1460,11 +1476,26 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
     })
   }
 
-  (& $find 'HeaderInfo').Text = ("Engine: {0}{1}   -   Mode: {2}   -   Incremental: {3}" -f $(if ($cfg.engines.clamav) {'ClamAV '} else {''}), $(if ($cfg.engines.emsisoft) {'Emsisoft'} else {''}), $cfg.options.mode, $(if ($incOn) {'On'} else {'Off'}))
+  $cfgDefHdr = if ($cfg.engines.PSObject.Properties['defender']) { [bool]$cfg.engines.defender } else { $false }
+  $engHdr = ((@($(if ($cfg.engines.clamav) {'ClamAV'}), $(if ($cfg.engines.emsisoft) {'Emsisoft'}), $(if ($cfgDefHdr) {'Defender'})) | Where-Object { $_ }) -join ' ')
+  (& $find 'HeaderInfo').Text = ("Engine: {0}   -   Mode: {1}   -   Incremental: {2}" -f $engHdr, $cfg.options.mode, $(if ($incOn) {'On'} else {'Off'}))
   try { $lastLog = Get-ChildItem $LogDir -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($lastLog) { (& $find 'HeroLast').Text = "Last scan: " + $lastLog.LastWriteTime.ToString('ddd, HH:mm') } } catch {}
   try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
   try { (& $find 'VerLabel').Text = "v$ScanAvVersion"; (& $find 'BuildLabel').Text = "Build $ScanAvBuild"; (& $find 'AboutVersion').Text = "Version $ScanAvVersion   -   Build $ScanAvBuild" } catch {}
   Rebuild-Roots
+  # Folder-watch: poll the visible folders every few seconds and auto-refresh the
+  # tree when a sub-folder is added/removed on disk (e.g. a new game finishes
+  # downloading) - no need to leave/return to the app or hit Refresh manually.
+  $script:folderFingerprint = Get-VisibleFingerprint
+  $script:folderWatchTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:folderWatchTimer.Interval = [TimeSpan]::FromSeconds(3)
+  $script:folderWatchTimer.Add_Tick({
+    try {
+      $fp = Get-VisibleFingerprint
+      if ($fp -ne $script:folderFingerprint) { $script:folderFingerprint = $fp; Refresh-Targets }
+    } catch {}
+  })
+  $script:folderWatchTimer.Start()
   Show-Page 'Dashboard'
 
   # ---- settings load/save ----
