@@ -775,10 +775,24 @@ $script:runTick = {
   } catch {}
   if ($script:runProc -and $script:runProc.HasExited) {
     if ($script:runTimer) { $script:runTimer.Stop() }
+    $script:runProc = $null
     $script:runProgress.IsIndeterminate = $false; $script:runProgress.Visibility = 'Collapsed'
     $script:runTitle.Text = 'Done'
     $script:runBack.Content = 'Back to Dashboard'
+    if ($script:runCancel) { $script:runCancel.Visibility = 'Collapsed' }
   }
+}
+function script:Stop-InAppRun {
+  if ($script:runProc -and -not $script:runProc.HasExited) {
+    try { Start-Process taskkill -ArgumentList "/PID $($script:runProc.Id) /T /F" -WindowStyle Hidden -Wait } catch {}
+  }
+  if ($script:runTimer) { $script:runTimer.Stop() }
+  $script:runProc = $null
+  $script:runProgress.IsIndeterminate = $false; $script:runProgress.Visibility = 'Collapsed'
+  $script:runTitle.Text = 'Cancelled'
+  $script:runBack.Content = 'Back to Dashboard'
+  if ($script:runCancel) { $script:runCancel.Visibility = 'Collapsed' }
+  if ($script:runBox) { $script:runBox.AppendText("`r`n--- cancelled by user ---`r`n"); $script:runBox.ScrollToEnd() }
 }
 function script:Start-InAppRun([string]$title, [string]$paramExpr) {
   $tmp = Join-Path $env:TEMP ('scanav_run_' + [Guid]::NewGuid().ToString('N') + '.log')
@@ -789,6 +803,7 @@ function script:Start-InAppRun([string]$title, [string]$paramExpr) {
   if ($script:logListBorder) { $script:logListBorder.Visibility = 'Collapsed'; $script:logListCol.Width = New-Object System.Windows.GridLength(0) }
   $script:runProgress.IsIndeterminate = $true; $script:runProgress.Visibility = 'Visible'
   $script:runBack.Content = 'Hide'
+  if ($script:runCancel) { $script:runCancel.Visibility = 'Visible' }
   $script:runView.Visibility = 'Visible'
   $ps1q = $script:guiPs1 -replace "'", "''"; $tmpq = $tmp -replace "'", "''"
   $cmd = "& '$ps1q' $paramExpr -NoElevate -Verbose *>&1 | Out-File -LiteralPath '$tmpq' -Encoding utf8"
@@ -824,6 +839,7 @@ function script:Show-LogsInApp {
   $script:runTitle.Text = 'Logs'
   $script:runProgress.Visibility = 'Collapsed'
   $script:runBack.Content = 'Back to Dashboard'
+  if ($script:runCancel) { $script:runCancel.Visibility = 'Collapsed' }
   $script:logListBorder.Visibility = 'Visible'
   $script:logListCol.Width = New-Object System.Windows.GridLength(300)
   $script:logList.Children.Clear()
@@ -910,7 +926,7 @@ function Show-Gui {
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
       <Grid Grid.Row="0" Margin="0,0,0,18">
-        <StackPanel HorizontalAlignment="Left"><TextBlock Text="scan-av" FontSize="30" FontWeight="Bold"/><TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/></StackPanel>
+        <StackPanel HorizontalAlignment="Left"><TextBlock Text="Antivirus Scan - Downloaded Files" FontSize="24" FontWeight="Bold"/><TextBlock x:Name="HeaderInfo" FontSize="14" Foreground="#8A93A6" Margin="0,4,0,0"/></StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button x:Name="BtnSettings" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Settings" FontSize="15"/></StackPanel></Button>
           <Button x:Name="BtnMore" Style="{StaticResource Soft}"><TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="16"/></Button>
@@ -945,16 +961,16 @@ function Show-Gui {
           <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="TargetsPanel"/></ScrollViewer>
         </Grid>
 
-        <Grid Grid.Column="1">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-          <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="0" Margin="0,0,8,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Scan All" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Deep scan everything" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-          <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Grid.Row="0" Grid.Column="1" Margin="8,0,0,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Scan Checked" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Scan selected items" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-          <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="0" Margin="0,8,8,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#54D98C"/><TextBlock Text="Update Definitions" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Update virus database" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-          <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Grid.Row="1" Grid.Column="1" Margin="8,8,0,8"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Update App" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Check for updates" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-          <Button x:Name="TileLogs" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="0" Margin="0,8,8,0"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="View Logs" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="See scan logs" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-          <Button x:Name="TileAdd" Style="{StaticResource Tile}" Grid.Row="2" Grid.Column="1" Margin="8,8,0,0"><StackPanel HorizontalAlignment="Left"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="#8B8BF8"/><TextBlock Text="Add Folder" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0"/><TextBlock Text="Pick a folder" FontSize="11" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></Button>
-        </Grid>
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly">
+          <StackPanel>
+            <Button x:Name="TileScanAll" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan All" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Deep scan everything" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+            <Button x:Name="TileScanChecked" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Scan Checked" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Scan selected items" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+            <Button x:Name="TileUpdateDefs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#54D98C" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Update Definitions" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Update virus database" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+            <Button x:Name="TileUpdateApp" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xEBD3;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Update App" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Check for updates" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+            <Button x:Name="TileLogs" Style="{StaticResource Tile}" Margin="0,0,0,10" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="View Logs" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Browse scan logs" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+            <Button x:Name="TileAdd" Style="{StaticResource Tile}" Margin="0,0,0,0" MinHeight="60"><StackPanel Orientation="Horizontal"><Border Width="40" Height="40" CornerRadius="10" Background="#1A2231"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#8B8BF8" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Add Folder" FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"/><TextBlock Text="Pick a folder to scan" FontSize="12" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel></StackPanel></Button>
+          </StackPanel>
+        </ScrollViewer>
 
         <!-- in-app run / output / logs overlay -->
         <Border x:Name="RunView" Grid.Column="0" Grid.ColumnSpan="2" Background="#070910" Visibility="Collapsed">
@@ -971,7 +987,10 @@ function Show-Gui {
                 <TextBox x:Name="RunBox" Background="Transparent" Foreground="#C7CEDA" BorderThickness="0" IsReadOnly="True" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
               </Border>
             </Grid>
-            <Button x:Name="RunBack" Grid.Row="3" Style="{StaticResource Soft}" HorizontalAlignment="Left" Margin="0,14,0,0" Content="Back to Dashboard"/>
+            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0">
+              <Button x:Name="RunBack" Style="{StaticResource Soft}" Content="Back to Dashboard"/>
+              <Button x:Name="RunCancel" Style="{StaticResource Soft}" Content="Cancel" Margin="10,0,0,0" Visibility="Collapsed"/>
+            </StackPanel>
           </Grid>
         </Border>
       </Grid>
@@ -1016,19 +1035,23 @@ function Show-Gui {
   $script:runProgress  = (& $find 'RunProgress')
   $script:runBox       = (& $find 'RunBox')
   $script:runBack      = (& $find 'RunBack')
+  $script:runCancel    = (& $find 'RunCancel')
   $script:logListBorder = (& $find 'LogListBorder')
   $script:logListCol    = (& $find 'LogListCol')
   $script:logList       = (& $find 'LogList')
   $script:runTimer    = $null; $script:runProc = $null
   Rebuild-Roots
 
+  $confirm = { param($msg) (([System.Windows.MessageBox]::Show($msg,'scan-av','YesNo','Question')) -eq 'Yes') }
   $scanChecked = {
     $sel = @(Collect-Targets)
     if (-not $sel.Count) { [System.Windows.MessageBox]::Show('Nothing checked. Tick at least one item, or use Scan All.','scan-av') | Out-Null; return }
+    if (-not (& $confirm ("Scan {0} selected item(s) now?" -f $sel.Count))) { return }
     $pathExpr = ($sel | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
     Start-InAppRun 'Scanning selected items' ("-Path $pathExpr")
   }
   $doUpdateApp = {
+    if (-not (& $confirm 'Check GitHub and download the latest app version?')) { return }
     $r = Update-FromGitHub
     if ($r.ok) {
       $a = [System.Windows.MessageBox]::Show("$($r.msg)`n`nRestart the app now?",'scan-av','YesNo','Question')
@@ -1037,10 +1060,12 @@ function Show-Gui {
   }
   $openCfg = { Start-Process -FilePath 'powershell.exe' -ArgumentList ("-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& '{0}' -Configure`"" -f ($ps1 -replace "'", "''")) }
 
-  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { Start-InAppRun 'Scanning all folders' '' } })
-  (& $find 'TileScanAll').Add_Click({ Start-InAppRun 'Scanning all folders' '' })
+  $scanAll = { if (& $confirm 'Scan ALL configured folders now? This can take a while.') { Start-InAppRun 'Scanning all folders' '' } }
+  $updateDefs = { if (& $confirm 'Update virus definitions now? This downloads from ClamAV and Emsisoft.') { Start-InAppRun 'Updating definitions' '-Update' } }
+  (& $find 'ScanNow').Add_Click({ $sel = @(Collect-Targets); if ($sel.Count) { & $scanChecked } else { & $scanAll } })
+  (& $find 'TileScanAll').Add_Click($scanAll)
   (& $find 'TileScanChecked').Add_Click({ & $scanChecked })
-  (& $find 'TileUpdateDefs').Add_Click({ Start-InAppRun 'Updating definitions' '-Update' })
+  (& $find 'TileUpdateDefs').Add_Click($updateDefs)
   (& $find 'TileLogs').Add_Click({ Show-LogsInApp })
   (& $find 'TileUpdateApp').Add_Click($doUpdateApp)
   (& $find 'TileAdd').Add_Click({
@@ -1057,8 +1082,10 @@ function Show-Gui {
     if ($a -eq 'Yes') { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
   })
   (& $find 'RunBack').Add_Click({ if ($script:runTimer) { $script:runTimer.Stop() }; $script:runView.Visibility = 'Collapsed' })
+  (& $find 'RunCancel').Add_Click({ if (& $confirm 'Cancel the running operation?') { Stop-InAppRun } })
+  (& $find 'NavDashboard').Add_Click({ $script:runView.Visibility = 'Collapsed' })
   (& $find 'NavScan').Add_Click({ & $scanChecked })
-  (& $find 'NavUpdates').Add_Click({ Start-InAppRun 'Updating definitions' '-Update' })
+  (& $find 'NavUpdates').Add_Click($updateDefs)
   (& $find 'NavLogs').Add_Click({ Show-LogsInApp })
   (& $find 'NavSettings').Add_Click($openCfg)
   (& $find 'BtnSettings').Add_Click($openCfg)
