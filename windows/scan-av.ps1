@@ -879,6 +879,15 @@ function script:Load-ModelChildren($node) {
     }
   } catch {}
   $node.Children = $kids; $node.Loaded = $true
+  # A checked folder means "scan everything under here", so children (including any
+  # new ones that just appeared) inherit the checked state when they load.
+  if ($node.Checked) { foreach ($c in $kids) { $c.Checked = $true } }
+}
+# Set a node's checked state and cascade it to all loaded descendants, so ticking a
+# parent folder visibly selects its sub-folders (and unticking clears them).
+function script:Set-CheckCascade($node, [bool]$value) {
+  $node.Checked = $value
+  foreach ($c in $node.Children) { Set-CheckCascade $c $value }
 }
 function script:New-TargetCard($node) {
   $card = New-Object System.Windows.Controls.Border
@@ -942,14 +951,14 @@ function script:New-TargetCard($node) {
   [System.Windows.Controls.Grid]::SetColumn($tr,2); [void]$g.Children.Add($tr)
   $card.Child = $g
 
-  $box.Add_MouseLeftButtonUp({ param($s,$e) $n = $s.Tag; $n.Checked = -not $n.Checked; $e.Handled = $true; Render-Targets })
+  $box.Add_MouseLeftButtonUp({ param($s,$e) $n = $s.Tag; Set-CheckCascade $n (-not $n.Checked); $e.Handled = $true; Render-Targets })
   $card.Add_MouseLeftButtonUp({
     param($s,$e)
     $n = $s.Tag
     if ($n.IsFolder -and $n.HasChildren) {
       if (-not $n.Expanded -and -not $n.Loaded) { Load-ModelChildren $n }
       $n.Expanded = -not $n.Expanded
-    } else { $n.Checked = -not $n.Checked }
+    } else { Set-CheckCascade $n (-not $n.Checked) }
     Render-Targets
   })
   return $card
