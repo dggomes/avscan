@@ -970,6 +970,43 @@ function script:Rebuild-Roots {
   }
   Render-Targets
 }
+# Capture which nodes are currently expanded/checked (by path) so a refresh can
+# rebuild the tree from disk - picking up newly added sub-folders - without losing
+# the user's place or selection.
+function script:Get-TargetState {
+  $expanded = New-Object System.Collections.Generic.List[string]
+  $checked  = New-Object System.Collections.Generic.List[string]
+  function walk($n) {
+    if ($n.Expanded) { [void]$expanded.Add([string]$n.Path) }
+    if ($n.Checked)  { [void]$checked.Add([string]$n.Path) }
+    foreach ($c in $n.Children) { walk $c }
+  }
+  foreach ($n in @($script:rootNodes)) { walk $n }
+  return @{ Expanded = $expanded; Checked = $checked }
+}
+function script:Restore-TargetState($state) {
+  function walk($n) {
+    if ($state.Expanded -contains $n.Path) {
+      if (-not $n.Loaded) { Load-ModelChildren $n }   # re-reads disk -> new folders appear
+      $n.Expanded = $true
+    }
+    if ($state.Checked -contains $n.Path) { $n.Checked = $true }
+    foreach ($c in $n.Children) { walk $c }
+  }
+  foreach ($n in @($script:rootNodes)) { walk $n }
+}
+# Re-enumerate the scan folders from disk, preserving expand/check state. Safe to
+# call repeatedly (debounced on window activation).
+function script:Refresh-Targets {
+  if (-not $script:guiCfg) { return }
+  $st = Get-TargetState
+  $script:rootNodes = @()
+  foreach ($f in @($script:guiCfg.scanFolders)) {
+    if (Test-Path -LiteralPath $f) { $n = New-ModelNode $f $true 0; $n.Checked = $true; $script:rootNodes += $n }
+  }
+  Restore-TargetState $st
+  Render-Targets
+}
 function script:Collect-Targets {
   $acc = New-Object System.Collections.Generic.List[string]
   function walk($n) { if ($n.Checked) { $acc.Add([string]$n.Path) }; foreach ($c in $n.Children) { walk $c } }
@@ -1254,7 +1291,10 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
               <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
               <Grid Grid.Row="0" Margin="0,0,0,12">
                 <StackPanel HorizontalAlignment="Left"><TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/><TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel>
-                <Button x:Name="BtnEdit" Style="{StaticResource Soft}" HorizontalAlignment="Right" VerticalAlignment="Top"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                  <Button x:Name="BtnRefresh" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Refresh" FontSize="14"/></StackPanel></Button>
+                  <Button x:Name="BtnEdit" Style="{StaticResource Soft}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Edit" FontSize="14"/></StackPanel></Button>
+                </StackPanel>
               </Grid>
               <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" PanningMode="VerticalOnly"><StackPanel x:Name="TargetsPanel"/></ScrollViewer>
             </Grid>
@@ -1541,6 +1581,12 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
     if (-not $tops.Count) { [System.Windows.MessageBox]::Show('Check the top-level folder(s) to remove, then tap Edit.','scan-av') | Out-Null; return }
     if (& $confirm ("Remove {0} folder(s) from the scan list?" -f $tops.Count)) { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
   })
+  (& $find 'BtnRefresh').Add_Click({ Refresh-Targets })
+  # Auto-refresh the target tree from disk whenever the window is brought forward
+  # (e.g. after creating a folder in Explorer and switching back). Debounced so
+  # rapid focus changes don't rebuild repeatedly.
+  $script:lastTargetsRefresh = [Environment]::TickCount
+  $win.Add_Activated({ if (([Environment]::TickCount - $script:lastTargetsRefresh) -gt 1500) { $script:lastTargetsRefresh = [Environment]::TickCount; try { Refresh-Targets } catch {} } })
   (& $find 'RunBack').Add_Click({ Show-Page 'Dashboard' })
   (& $find 'RunCancel').Add_Click({ if (& $confirm 'Cancel the running operation?') { Stop-InAppRun } })
   (& $find 'NavDashboard').Add_Click({ Show-Page 'Dashboard' })
