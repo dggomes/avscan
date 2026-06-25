@@ -62,8 +62,12 @@ param(
   [switch]$SelfUpdate,
   [switch]$InstallContextMenu,
   [switch]$RemoveContextMenu,
+  [switch]$NoPrompt,
   [switch]$Help
 )
+
+$ScanAvVersion = '1.1.0'
+$ScanAvBuild   = '2026-06-25'
 
 $ErrorActionPreference = 'Stop'
 
@@ -483,8 +487,8 @@ function Invoke-Native {
     # Stringify the merged stream so native stderr shows as plain text instead of
     # red PowerShell NativeCommandError blocks (clamscan's per-file "Can't fstat"
     # warnings are not fatal and shouldn't look like a script error).
-    if ($Live -and $Log) { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log | Out-Host }
-    elseif ($Live)       { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-Host }
+    if ($Live -and $Log) { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log | ForEach-Object { Write-Host $_ } }
+    elseif ($Live)       { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | ForEach-Object { Write-Host $_ } }
     elseif ($Log)        { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath $Log -Encoding UTF8 }
     else                 { & $Exe @Arguments 2>&1 | Out-Null }
   } catch { if ($Log) { "scan-av: native call raised: $_" | Out-File -FilePath $Log -Append -Encoding UTF8 } }
@@ -844,7 +848,7 @@ function script:Start-InAppRun([string]$title, [string]$paramExpr) {
   if ($script:runCancel) { $script:runCancel.Visibility = 'Visible' }
   $script:runView.Visibility = 'Visible'
   $ps1q = $script:guiPs1 -replace "'", "''"; $tmpq = $tmp -replace "'", "''"
-  $cmd = "& '$ps1q' $paramExpr -NoElevate -Verbose *>&1 | Out-File -LiteralPath '$tmpq' -Encoding utf8"
+  $cmd = "& '$ps1q' $paramExpr -NoElevate -NoPrompt -Verbose *>&1 | Out-File -LiteralPath '$tmpq' -Encoding utf8"
   $psArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$cmd`""
   try { $script:runProc = Start-Process powershell.exe -ArgumentList $psArgs -WindowStyle Hidden -PassThru }
   catch { $script:runProc = $null; $script:runBox.AppendText("Failed to start: $_") }
@@ -905,6 +909,7 @@ function Show-Gui {
   $script:guiCfg = $cfg
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
   $script:guiPs1 = $ps1
+  try { Install-ContextMenu | Out-Null } catch {}   # ensure the folder right-click entry exists
   $incOn = if ($null -ne $cfg.options.incremental) { [bool]$cfg.options.incremental } else { $true }
 
   $xaml = @"
@@ -957,6 +962,8 @@ function Show-Gui {
         <Button x:Name="NavLogs" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Logs" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavSettings" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="Settings" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
         <Button x:Name="NavAbout" Style="{StaticResource Nav}"><StackPanel><TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"/><TextBlock Text="About" FontSize="12" Margin="0,4,0,0" HorizontalAlignment="Center"/></StackPanel></Button>
+        <TextBlock x:Name="VerLabel" Text="" FontSize="11" Foreground="#5A6270" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+        <TextBlock x:Name="BuildLabel" Text="" FontSize="9" Foreground="#454C5A" HorizontalAlignment="Center" Margin="0,2,0,0"/>
       </StackPanel>
     </Border>
 
@@ -1066,6 +1073,7 @@ function Show-Gui {
     if ($lastLog) { (& $find 'HeroLast').Text = "Last scan: " + $lastLog.LastWriteTime.ToString('ddd, HH:mm') }
   } catch {}
   try { (& $find 'StatusTime').Text = (Get-Date).ToString('HH:mm') } catch {}
+  try { (& $find 'VerLabel').Text = "v$ScanAvVersion"; (& $find 'BuildLabel').Text = "Build $ScanAvBuild" } catch {}
 
   $script:TargetsPanel = (& $find 'TargetsPanel')
   $script:runView      = (& $find 'RunView')
@@ -1262,7 +1270,9 @@ $cache = if ($incremental) { Load-Cache } else { @{} }
 
 # Feature: ask whether to re-scan everything or only new/changed (when a cache exists)
 $rescanAll = [bool]$RescanAll
-if ($incremental -and -not $rescanAll -and $cache.Count -gt 0) {
+# Only prompt in a real interactive console. -NoPrompt (used by the app's hidden
+# child process) skips it - otherwise Read-Host blocks forever with no console.
+if ($incremental -and -not $rescanAll -and -not $NoPrompt -and $cache.Count -gt 0) {
   try {
     $ans = Read-Host 'Re-scan ALL items, or only NEW/CHANGED since last scan? (a = All / Enter = new only)'
     if ($ans -match '^\s*[Aa]') { $rescanAll = $true }
