@@ -554,7 +554,10 @@ function Run-ClamAV {
   $lines = Get-Content $Log -ErrorAction SilentlyContinue
   $hits  = @($lines | Where-Object { $_ -match ' FOUND$' -and $_ -notmatch 'Heuristics\.Limits\.Exceeded' })
   $skips = @($lines | Where-Object { $_ -match 'Heuristics\.Limits\.Exceeded' })
-  [pscustomobject]@{ Engine='ClamAV'; Rc=$rc; Hits=$hits; Skipped=$skips.Count
+  # files clamscan could not read/scan (>2GiB, locked, path issues) - reported as
+  # errors, NOT clean. e.g. "Can't get file status ERROR" / "Can't open file ERROR".
+  $errs  = @($lines | Where-Object { $_ -match "Can't (get file status|open file|read)" -or $_ -match ': ERROR$' })
+  [pscustomobject]@{ Engine='ClamAV'; Rc=$rc; Hits=$hits; Skipped=$skips.Count; Errors=$errs
     Scanned = ([regex]::Match(($lines -join "`n"),'Scanned files:\s*(\d+)').Groups[1].Value) }
 }
 
@@ -760,6 +763,11 @@ function Scan-Target {
     } else {
       $sk = if ($r.Skipped) { " ($($r.Skipped) skipped >limit)" } else { '' }
       Ok ("{0}: clean - scanned {1} file(s){2}" -f $r.Engine, $r.Scanned, $sk)
+    }
+    $errs = if ($r.PSObject.Properties['Errors']) { @($r.Errors) } else { @() }
+    if ($errs.Count -gt 0) {
+      Warn ("    {0}: {1} file(s) could NOT be scanned (too large / locked / unreadable) - not a clean verdict for them:" -f $r.Engine, $errs.Count)
+      $errs | Select-Object -First 8 | ForEach-Object { Warn ("        " + (($_ -replace ': ERROR$','') -replace "^.*\\","")) }
     }
     Info "    log: $log"
   }
@@ -1817,30 +1825,31 @@ if ($incremental -and -not $rescanAll -and -not $NoPrompt -and $cache.Count -gt 
   } catch {}   # non-interactive host -> keep new-only
 }
 
-# Expand folder targets into per-child units so whole unchanged items get skipped -
-# BUT only when the folder is a collection of sub-folders (e.g. a parent library).
-# A folder with loose files (an actual content folder) is scanned as ONE unit:
-# scanning each loose file separately makes clamscan reload its whole signature DB
-# per file (~10-15s each). One unit = one clamscan -r over the folder.
+# Expand targets into per-child units so unchanged items get skipped on later runs.
+# A target is a LIBRARY only if it's one of the user's CONFIGURED scan folders (a
+# parent the user is watching, e.g. "Games"): it's expanded so each sub-folder/file
+# is its own cache unit, which means a NEW or moved-in sub-folder is always a fresh
+# unit that gets scanned - never hidden inside the parent's single cache entry.
+# Anything else (a specific game picked via Scan Checked, a context-menu folder, a
+# sub-folder of a library) is CONTENT: scanned as ONE recursive unit. That avoids
+# splitting a game into its internal folders, and avoids the per-file clamscan
+# DB-reload storm (each clamscan invocation reloads the whole ~3.6M-sig DB).
+$rootSet = @{}
+foreach ($rf in @($cfg.scanFolders)) { if ($rf) { $rootSet[([string]$rf).TrimEnd('\','/').ToLowerInvariant()] = $true } }
 $units = @()
 foreach ($t in $targets) {
-  if ($incremental -and (Test-Path -LiteralPath $t -PathType Container)) {
+  $isRoot = $rootSet.ContainsKey(([string]$t).TrimEnd('\','/').ToLowerInvariant())
+  if ($incremental -and $isRoot -and (Test-Path -LiteralPath $t -PathType Container)) {
     $kids = @(Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue)
-    $subDirs = @($kids | Where-Object { $_.PSIsContainer })
+    $subDirs    = @($kids | Where-Object { $_.PSIsContainer })
     $looseFiles = @($kids | Where-Object { -not $_.PSIsContainer })
-    # A LIBRARY folder (more sub-folders than stray files - e.g. a "Games" parent) is
-    # expanded so each sub-folder is its own cache unit: a NEW sub-folder is then a
-    # fresh unit that always gets scanned, never hidden inside the parent's single
-    # cache entry. A CONTENT folder (a game: few sub-folders, many loose exe/dll
-    # files) is scanned as ONE recursive unit - avoids the per-file clamscan
-    # DB-reload storm.
-    if ($subDirs.Count -gt 0 -and $subDirs.Count -ge $looseFiles.Count) {
-      $subDirs    | ForEach-Object { $units += $_.FullName }   # each sub-folder = own unit
-      $looseFiles | ForEach-Object { $units += $_.FullName }   # stray files (few in a library)
+    if ($subDirs.Count -gt 0) {
+      $subDirs    | ForEach-Object { $units += $_.FullName }   # each game = its own unit
+      $looseFiles | ForEach-Object { $units += $_.FullName }   # loose archives/files at the root
     } else {
-      $units += $t   # content folder -> scan the whole thing once
+      $units += $t   # library with no sub-folders yet -> scan whole
     }
-  } else { $units += $t }
+  } else { $units += $t }   # a specific game / content folder -> one recursive scan
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
