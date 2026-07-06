@@ -31,7 +31,17 @@ It also distinguishes a **real detection** from noise:
 Each engine is independently toggleable in **Settings**. Optionally, ClamAV can pull
 **third-party (SaneSecurity) signatures**, and when a **VirusTotal** API key is
 configured the SHA-256 of any flagged file is checked against VirusTotal's
-multi-engine database automatically.
+multi-engine database automatically — deduplicated, cached for 7 days, and
+throttled to the free tier's 4 requests/minute. Two further VT options:
+
+- **Per-folder "VT: all files" mode** — the VT badge on each folder card switches
+  that folder to also reputation-check **all new/changed executables** against
+  VirusTotal on every scan, even when the local engines find nothing (catches
+  fresh malware that signatures miss; ≥3 VT engines flagging counts as a
+  detection). Default is flagged-files-only. `-VtAll` forces it for one CLI run.
+- **Upload unknown files** (opt-in, Settings) — files VirusTotal has never seen
+  are submitted for a full multi-engine analysis (max 650 MB; uploads are shared
+  with the VT community, so never enable it for folders holding private files).
 
 The Windows tool is both a **command-line scanner** and a **touch/controller-friendly desktop app** (WPF). The macOS/Linux tool is a small command-line script.
 
@@ -75,16 +85,26 @@ scan-av                                 # scan configured folders, both engines
 scan-av -Path 'D:\Downloads\file.rar'   # scan one archive or folder
 scan-av -Update                         # force a definition refresh
 scan-av -RescanAll                      # ignore the cache and re-scan everything
+scan-av -VtAll                          # also VT-check new executables this run
+scan-av -Engine all                     # ClamAV + Emsisoft + Defender
 scan-av -Configure                      # re-run setup
 scan-av -AddFolder 'D:\Stuff'           # manage the saved folder list
-scan-av -InstallContextMenu             # add a folder right-click "Antivirus Scan"
+scan-av -InstallContextMenu             # right-click "Antivirus Scan" (folders + files)
+scan-av -ListQuarantine                 # list quarantined files
+scan-av -RestoreQuarantine <name|all>   # restore from quarantine
 ```
+
+Exit codes: `0` clean, `1` threats found, `2` some items could not be scanned.
 
 ### Behavior
 
-- **Incremental scanning** — a cache (`%LOCALAPPDATA%\ScanAV\scan-cache.json`) records what has been scanned; unchanged items are skipped on later runs. Change is detected by size + modified-time (no re-hashing). `-RescanAll` forces a full re-scan.
+- **Incremental scanning** — a cache (`%LOCALAPPDATA%\ScanAV\scan-cache.json`) records what has been scanned; unchanged items are skipped on later runs. Change is detected by size + modified-time (no re-hashing). `-RescanAll` forces a full re-scan. Items whose scan **failed** (engine error, encrypted/corrupt archive) are never cached as clean — they are reported and retried on the next run.
+- **Batched ClamAV** — all in-place items in a run are scanned in **one** clamscan invocation, so the multi-second signature-database load happens once instead of once per folder. Results are attributed back per item, so incremental caching still works per folder.
+- **Engine timeout** — a stuck engine is killed after a configurable timeout (default 30 min) and the item is reported as *not scanned*, never as clean.
+- **Quarantine** — flagged files (or the archive containing them) can be moved to `%LOCALAPPDATA%\ScanAV\quarantine`, renamed so they can't run, and restored later (`-ListQuarantine` / `-RestoreQuarantine`, or the Quarantine button on a threat card in the app).
 - **Auto-update** — definitions refresh before a scan if older than a configurable interval.
-- **Explorer right-click** — a per-user "Antivirus Scan" entry on folders runs an elevated scan of just that folder (on Windows 11 it's under "Show more options").
+- **Explorer right-click** — a per-user "Antivirus Scan" entry on folders **and on archive/executable files** runs an elevated scan of just that item (on Windows 11 it's under "Show more options").
+- **In-app results** — the Scan page shows a real per-item progress bar and, when threats are found, result cards with *Open VirusTotal / Show in Explorer / Quarantine* actions; a tray notification fires when a scan finishes.
 - Per-scan logs are kept in `%LOCALAPPDATA%\ScanAV\logs` (pruned after 7 days).
 
 ---
@@ -98,6 +118,7 @@ cp macos/scan-archive ~/bin/ && chmod +x ~/bin/scan-archive
 scan-archive '/path/to/file.rar'          # scan the executable surface of an archive
 scan-archive --full '/path/to/file.7z'    # extract & scan everything
 scan-archive --update '/path/to/file.rar' # freshclam first
+VT_API_KEY=... scan-archive 'file.rar'    # + VirusTotal hash lookup on detections
 ```
 
 ---

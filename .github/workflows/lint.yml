@@ -1,0 +1,37 @@
+# The self-updater ships raw main to every installed copy, so a script that fails
+# to parse would brick updates - this gate is the safety net.
+name: lint
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse check (protects self-update)
+        shell: pwsh
+        run: |
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/scan-av.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Host 'scan-av.ps1 parses cleanly.'
+      - name: Fixture tests
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/scan-av.Tests.ps1
+      - name: PSScriptAnalyzer (errors only)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path windows/scan-av.ps1 -Severity Error
+          $r | Format-Table -AutoSize
+          if ($r) { exit 1 }
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck (errors only)
+        run: shellcheck -S error macos/scan-archive
