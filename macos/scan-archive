@@ -23,6 +23,10 @@
 #   --tmp <dir>   Where to extract (default: alongside the archive).
 #   -h, --help    Show this help.
 #
+# Env:
+#   VT_API_KEY    Optional VirusTotal API key. When set, every real detection's
+#                 SHA-256 is looked up on VirusTotal (multi-engine verdict).
+#
 # Exit codes: 0 = all clean | 1 = real malware found | 2 = usage/tool error
 #
 # Requires: clamscan, 7z (p7zip).  Both already installed via Homebrew.
@@ -41,7 +45,8 @@ UPDATE=0
 KEEP=0
 TMP_BASE=""
 
-usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+# print the whole comment header (however long it grows), stripping the "# "
+usage() { awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; exit "${1:-2}"; }
 
 # ---------- arg parsing ----------
 ARCHIVES=()
@@ -109,21 +114,34 @@ for ARCHIVE in "${ARCHIVES[@]}"; do
     OUT="$(dirname "$ARCHIVE")/_scanarchive_$$_$(basename "$ARCHIVE" | tr ' /' '__')"
   fi
   rm -rf "$OUT"; mkdir -p "$OUT" || { echo "  !! Cannot create temp dir $OUT"; OVERALL_RC=2; continue; }
+  # absolute + symlink-resolved (/tmp -> /private/tmp) so it matches the paths
+  # clamscan prints, and the display/VT path stripping below works
+  OUT=$(cd "$OUT" && pwd -P)
 
   echo
+  # dummy -p password: encrypted archives FAIL instead of prompting on stdin
   if [ "$FULL" -eq 1 ]; then
     echo "  --- Extracting ALL contents (--full) ... ---"
-    7z x "$ARCHIVE" -o"$OUT" -y >/dev/null 2>&1
+    7z x "$ARCHIVE" -o"$OUT" -pscanav-no-password -y >/dev/null 2>&1
   else
     echo "  --- Extracting executable/script files only ... ---"
-    7z x "$ARCHIVE" -o"$OUT" "${INCLUDE_FLAGS[@]}" -y >/dev/null 2>&1
+    7z x "$ARCHIVE" -o"$OUT" -pscanav-no-password "${INCLUDE_FLAGS[@]}" -y >/dev/null 2>&1
   fi
+  x_rc=$?
   n_files=$(find "$OUT" -type f ! -name '._*' | wc -l | tr -d ' ')
   echo "      extracted $n_files file(s), $(du -sh "$OUT" 2>/dev/null | awk '{print $1}')"
 
   if [ "$n_files" -eq 0 ]; then
-    echo "      (nothing to scan)"; [ "$KEEP" -eq 0 ] && rm -rf "$OUT"; echo; continue
+    if [ "$x_rc" -ne 0 ]; then
+      echo "      !! 7z could not extract this archive (exit $x_rc) — encrypted, corrupt or"
+      echo "      !! unsupported. NOT scanned — this is not a clean verdict."
+      [ "$OVERALL_RC" -eq 0 ] && OVERALL_RC=2   # never mask a malware exit code
+    else
+      echo "      (nothing to scan)"
+    fi
+    [ "$KEEP" -eq 0 ] && rm -rf "$OUT"; echo; continue
   fi
+  [ "$x_rc" -ge 2 ] && echo "      (warning: 7z exit $x_rc — some members may not have been extracted)"
 
   # ---- 3. scan ----
   echo
@@ -143,15 +161,51 @@ for ARCHIVE in "${ARCHIVES[@]}"; do
   if [ -n "$skipped" ]; then
     echo
     echo "      NOTE: these files were too big to scan (NOT infections):"
-    echo "$skipped" | sed 's/:.*//; s|'"$OUT"'/||; s/^/        - /'
+    echo "$skipped" | sed 's/:.*//; s|/private'"$OUT"'/||; s|'"$OUT"'/||; s/^/        - /'
   fi
 
   echo
   if [ -n "$real_hits" ]; then
     echo "  *** REAL MALWARE DETECTED ***"
-    echo "$real_hits" | sed 's|'"$OUT"'/||; s/^/      /'
+    # (clamscan resolves the /tmp symlink to /private/tmp on macOS - strip both)
+    echo "$real_hits" | sed 's|/private'"$OUT"'/||; s|'"$OUT"'/||; s/^/      /'
     OVERALL_RC=1
-  elif [ "$scan_rc" -eq 0 ] || [ -z "$real_hits" ]; then
+
+    # ---- VirusTotal multi-engine hash lookup (needs VT_API_KEY; free tier) ----
+    if [ -n "${VT_API_KEY:-}" ] && command -v curl >/dev/null 2>&1; then
+      echo
+      echo "  --- VirusTotal hash lookup ---"
+      first=1
+      echo "$real_hits" | sed 's/: [^:]* FOUND$//' | sort -u | while IFS= read -r hitfile; do
+        [ -f "$hitfile" ] || continue
+        [ "$first" -eq 0 ] && sleep 16   # free keys: 4 requests/min
+        first=0
+        sha=$(shasum -a 256 "$hitfile" | awk '{print $1}')
+        rel=${hitfile#/private}; rel=${rel#"$OUT"/}
+        echo "      $rel"
+        echo "      SHA-256: $sha"
+        resp=$(curl -s -H "x-apikey: $VT_API_KEY" "https://www.virustotal.com/api/v3/files/$sha")
+        if command -v jq >/dev/null 2>&1; then
+          if echo "$resp" | jq -e '.data' >/dev/null 2>&1; then
+            mal=$(echo "$resp" | jq '.data.attributes.last_analysis_stats | .malicious + .suspicious')
+            tot=$(echo "$resp" | jq '[.data.attributes.last_analysis_stats | .malicious,.suspicious,.undetected,.harmless,.timeout] | add')
+            echo "      VirusTotal: $mal/$tot engines flag this file"
+          else
+            echo "      VirusTotal: hash not in VT database (or API error)"
+          fi
+        else
+          echo "      (install jq for an inline verdict; link below)"
+        fi
+        echo "      https://www.virustotal.com/gui/file/$sha"
+      done
+    else
+      echo "      (set VT_API_KEY to auto-check these hashes on VirusTotal)"
+    fi
+  elif [ "$scan_rc" -ge 2 ]; then
+    echo "  !! clamscan ERROR (exit $scan_rc) — this archive was NOT scanned (not a clean verdict):"
+    tail -5 "$LOG" | sed 's/^/      /'
+    [ "$OVERALL_RC" -eq 0 ] && OVERALL_RC=2
+  else
     echo "  ✅ CLEAN — no known malware in the scanned executables."
   fi
 
