@@ -31,7 +31,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. extract pure functions from the AST ----
-foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog')) {
+foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
   if (-not $f) { Assert $false "function $fnName found"; exit 1 }
   . ([scriptblock]::Create($f.Extent.Text))
@@ -81,6 +81,23 @@ Assert ($a.Hits.Count -eq 0 -and $a.Skipped -eq 1 -and $a.Scanned -eq '2') 'batc
 Assert ($a2.Hits.Count -eq 1 -and $a2.Errors.Count -eq 1 -and $a2.Scanned -eq '2') 'batch: Alpha Two gets its hit + error' "hits=$($a2.Hits.Count) errs=$($a2.Errors.Count) scanned=$($a2.Scanned)"
 Assert ($d.Hits.Count -eq 0 -and $d.Scanned -eq '1') 'batch: single-file target attributed' "scanned=$($d.Scanned)"
 Assert ($map.Keys.Count -eq 3) 'batch: stray path outside all targets ignored'
+
+# ---- 6b. Find-MovedCacheEntry: move-aware cache lookup ----
+$mvCache = @{
+  'C:\Downloads\GameX'   = [pscustomobject]@{ sig = 'D|120|987654|638600000000000000'; utc = '2026-07-01T00:00:00Z'; result = 'clean' }
+  'C:\Downloads\Other'   = [pscustomobject]@{ sig = 'D|5|100|638600000000000001';      utc = '2026-07-01T00:00:00Z'; result = 'clean' }
+  'C:\Downloads\Empty'   = [pscustomobject]@{ sig = 'D|0|0|0';                          utc = '2026-07-01T00:00:00Z'; result = 'clean' }
+}
+Assert ((Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameX' -Sig 'D|120|987654|638600000000000000') -eq 'C:\Downloads\GameX') `
+  'moved cache: same name + same signature at a new path matches'
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameY' -Sig 'D|120|987654|638600000000000000')) `
+  'moved cache: different name does NOT match despite same signature'
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameX' -Sig 'D|120|987654|638600000000000099')) `
+  'moved cache: changed content (different signature) does NOT match'
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\Empty' -Sig 'D|0|0|0')) `
+  'moved cache: empty-folder signature never matches (collides by design)'
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'C:\Downloads\GameX' -Sig 'D|120|987654|638600000000000000')) `
+  'moved cache: the unit itself is not its own move source'
 
 # ---- 7. Get-VtStatusCode message fallback ----
 try { throw 'The remote server returned an error: (404) Not Found.' } catch { $e = $_ }
