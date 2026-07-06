@@ -99,6 +99,7 @@ Exit codes: `0` clean, `1` threats found, `2` some items could not be scanned.
 ### Behavior
 
 - **Incremental scanning** — a cache (`%LOCALAPPDATA%\ScanAV\scan-cache.json`) records what has been scanned; unchanged items are skipped on later runs. Change is detected by size + modified-time (no re-hashing). `-RescanAll` forces a full re-scan. Items whose scan **failed** (engine error, encrypted/corrupt archive) are never cached as clean — they are reported and retried on the next run.
+- **Move-aware** — an item scanned clean and then **moved (or copied) to another watched folder is not re-scanned**: a clean cache entry with the same name and identical content signature (file count + total size + newest modified-time) is recognised as the same content at a new path and migrated. Renamed or modified items still re-scan.
 - **Batched ClamAV** — all in-place items in a run are scanned in **one** clamscan invocation, so the multi-second signature-database load happens once instead of once per folder. Results are attributed back per item, so incremental caching still works per folder.
 - **Engine timeout** — a stuck engine is killed after a configurable timeout (default 30 min) and the item is reported as *not scanned*, never as clean.
 - **Quarantine** — flagged files (or the archive containing them) can be moved to `%LOCALAPPDATA%\ScanAV\quarantine`, renamed so they can't run, and restored later (`-ListQuarantine` / `-RestoreQuarantine`, or the Quarantine button on a threat card in the app).
