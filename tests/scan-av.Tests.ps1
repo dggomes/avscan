@@ -19,18 +19,24 @@ if ($errs -and $errs.Count) { exit 1 }
 
 # ---- 1b. standalone launcher wiring for ROG Armoury / app launchers ----
 $launcherFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-StandaloneLauncher' }, $true) | Select-Object -First 1
+$updaterLauncherFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-UpdaterLauncher' }, $true) | Select-Object -First 1
 $shortcutFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-DesktopShortcut' }, $true) | Select-Object -First 1
+$updaterShortcutFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-UpdaterShortcut' }, $true) | Select-Object -First 1
 $updateFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-FromGitHub' }, $true) | Select-Object -First 1
 Assert ($launcherFn -and $launcherFn.Extent.Text -match 'ScanAV\.exe' -and $launcherFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
   'standalone launcher function builds ScanAV.exe wrapper'
+Assert ($updaterLauncherFn -and $updaterLauncherFn.Extent.Text -match 'ScanAV-Updater\.exe' -and $updaterLauncherFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe' -and $updaterLauncherFn.Extent.Text -match '-SelfUpdate' -and $updaterLauncherFn.Extent.Text -match '-NoExit') `
+  'updater launcher function builds visible ScanAV-Updater.exe self-update wrapper'
 Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'Shortcut target:' -and $shortcutFn.Extent.Text -match 'IconLocation' -and $shortcutFn.Extent.Text -match 'icon\.ico' -and $shortcutFn.Extent.Text -notmatch 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
   'desktop shortcut targets ScanAV.exe and uses app icon'
-Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher') `
-  'self-update refreshes standalone launcher'
+Assert ($updaterShortcutFn -and $updaterShortcutFn.Extent.Text -match 'Ensure-UpdaterLauncher' -and $updaterShortcutFn.Extent.Text -match 'Updater shortcut target:' -and $updaterShortcutFn.Extent.Text -match 'IconLocation' -and $updaterShortcutFn.Extent.Text -notmatch 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
+  'updater shortcut targets ScanAV-Updater.exe and uses app icon'
+Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher' -and $updateFn.Extent.Text -match 'Ensure-UpdaterLauncher' -and $updateFn.Extent.Text -match 'Updater launcher') `
+  'self-update refreshes standalone and updater launchers'
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.2')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.3')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -47,7 +53,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
+foreach ($fnName in @('New-UpdaterShortcut','Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }

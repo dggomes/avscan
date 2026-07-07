@@ -76,11 +76,16 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
 - Header controls include **Update** and **Exit**; Exit asks whether to minimize to tray or quit. The tray menu can reopen or exit the app.
 
-The installer also creates `%LOCALAPPDATA%\ScanAV\ScanAV.exe`, a small standalone
-launcher for the desktop app. If you use a launcher such as ROG Armoury, point it
-at that EXE instead of the PowerShell script; app updates refresh it automatically.
-The normal desktop shortcut targets this EXE directly. The optional zero-prompt
-shortcut still targets the Windows scheduled task runner by design.
+The installer also creates two standalone launchers:
+
+- `%LOCALAPPDATA%\ScanAV\ScanAV.exe` opens the desktop app.
+- `%LOCALAPPDATA%\ScanAV\ScanAV-Updater.exe` runs the GitHub self-updater in a visible update window.
+
+If you use a launcher such as ROG Armoury, point it at `ScanAV.exe` instead of
+the PowerShell script. App updates refresh both EXEs automatically. The normal
+desktop shortcut targets `ScanAV.exe` directly, and the updater shortcut targets
+`ScanAV-Updater.exe`. The optional zero-prompt shortcut still targets the Windows
+scheduled task runner by design.
 
 ```powershell
 scan-av -Gui          # open the app from the command line
