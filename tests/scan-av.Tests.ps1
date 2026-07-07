@@ -30,7 +30,7 @@ Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' 
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.2')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.3')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -47,7 +47,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderDialog')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -71,6 +71,11 @@ Assert ($addFolderFn -and $addFolderFn.Extent.Text -match 'Known network locatio
   'add folder dialog supports network locations and manual UNC paths'
 Assert ($knownNetworkFn -and $knownNetworkFn.Extent.Text -match "HKCU:\\Network" -and $knownNetworkFn.Extent.Text -match 'Network Shortcuts' -and $knownNetworkFn.Extent.Text -match 'DisplayRoot') `
   'known network folders include mapped drives and Explorer network shortcuts'
+$invokeAddFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Invoke-AddScanFolderDialog' -or $n.Name -eq 'script:Invoke-AddScanFolderDialog') }, $true) | Select-Object -First 1
+Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-AddScanFolderFallbackDialog') `
+  'add folder click path has guarded fallback dialog'
+Assert ($src -match "TileAdd'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}" -and $src -match "BtnAddTop'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}") `
+  'add folder buttons use guarded wrapper'
 
 # ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {
