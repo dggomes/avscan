@@ -70,7 +70,7 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - A protection-status hero and a prominent **Scan Now** action.
 - **Scan Targets** as expandable cards with large checkboxes — pick whole folders or specific sub-folders; give folders custom display names.
 - Folder cards include quick actions to open in Explorer, move/rename into another configured scan folder, or edit the display label.
-- Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder. Add Folder supports local folders, known network locations, and pasted UNC paths.
+- Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder. Add Folder supports local folders, known network locations, pasted UNC paths, and adding all discovered mapped drives at once.
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
 - Clean scan results show a next-step modal: close, choose a folder to rename/move into another configured scan folder, or choose an `.exe` to run. The run action can apply Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
