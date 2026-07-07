@@ -23,13 +23,17 @@ $shortcutFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Lang
 $updateFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-FromGitHub' }, $true) | Select-Object -First 1
 Assert ($launcherFn -and $launcherFn.Extent.Text -match 'ScanAV\.exe' -and $launcherFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
   'standalone launcher function builds ScanAV.exe wrapper'
-Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'Shortcut target:' -and $shortcutFn.Extent.Text -notmatch 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
-  'desktop shortcut targets ScanAV.exe and does not fall back to PowerShell'
+Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'Shortcut target:' -and $shortcutFn.Extent.Text -match 'IconLocation' -and $shortcutFn.Extent.Text -match 'icon\.ico' -and $shortcutFn.Extent.Text -notmatch 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
+  'desktop shortcut targets ScanAV.exe and uses app icon'
 Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher') `
   'self-update refreshes standalone launcher'
+$src = Get-Content $srcPath -Raw
+$verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
+$buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.2')) 'app version bumped for updater visibility'
+Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
-$src = Get-Content $srcPath -Raw
 $m = [regex]::Match($src, '(?s)\$xaml = @"(.*?)\r?\n"@')
 Assert $m.Success 'XAML block found'
 try {
