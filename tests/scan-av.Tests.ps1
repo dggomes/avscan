@@ -42,13 +42,16 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
 $showResultsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-RunResults' -or $n.Name -eq 'script:Show-RunResults') }, $true) | Select-Object -First 1
-Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose File' -and $showResultsFn.Extent.Text -match 'Compatibility') `
-  'clean scan results expose next-step actions'
+$cleanDialogFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-CleanNextStepDialog' -or $n.Name -eq 'script:Show-CleanNextStepDialog') }, $true) | Select-Object -First 1
+Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Show-CleanNextStepDialog' -and $showResultsFn.Extent.Text -notmatch 'Clean - choose next step') `
+  'clean scan results use modal next-step dialog'
+Assert ($cleanDialogFn -and $cleanDialogFn.Extent.Text -match 'All clean' -and $cleanDialogFn.Extent.Text -match 'Rename \+ Move Folder' -and $cleanDialogFn.Extent.Text -match 'Run EXE' -and $cleanDialogFn.Extent.Text -match 'compatibility settings') `
+  'clean next-step modal exposes close, move, run exe actions'
 
 # ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {

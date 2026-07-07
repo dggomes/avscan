@@ -1909,15 +1909,19 @@ function script:Add-ScanFolderDialog {
   function script:Move-FolderNode($node) {
     if ($node) { Move-PathWithDialog $node.Path }
   }
+  function script:Choose-FolderForMove([string]$initialFolder = '') {
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Choose the folder to rename or move'
+    $dlg.ShowNewFolderButton = $false
+    if ($initialFolder -and (Test-Path -LiteralPath $initialFolder -PathType Container)) { $dlg.SelectedPath = $initialFolder }
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.SelectedPath }
+    return $null
+  }
   function script:Choose-ExecutableFile([string]$folder) {
-    if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) {
-      [System.Windows.MessageBox]::Show('Folder not found.','scan-av') | Out-Null
-      return $null
-    }
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = 'Choose file to run'
-    $dlg.InitialDirectory = $folder
-    $dlg.Filter = 'Executable files (*.exe)|*.exe|Launchable files (*.exe;*.msi;*.msix;*.appx)|*.exe;*.msi;*.msix;*.appx|All files (*.*)|*.*'
+    $dlg.Title = 'Choose EXE to run'
+    if ($folder -and (Test-Path -LiteralPath $folder -PathType Container)) { $dlg.InitialDirectory = $folder }
+    $dlg.Filter = 'Executable files (*.exe)|*.exe|All files (*.*)|*.*'
     $dlg.CheckFileExists = $true
     $dlg.Multiselect = $false
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.FileName }
@@ -2001,14 +2005,94 @@ function script:Add-ScanFolderDialog {
     } catch {}
   }
 
-# Render last-results.json as threat cards with actions (VT link / reveal /
-# quarantine) above the raw console output.
+function script:Get-CleanActionStartFolder($res) {
+  foreach ($c in @($res.clean)) {
+    $p = [string]$c.target
+    if (-not $p -or -not (Test-Path -LiteralPath $p)) { continue }
+    if (Test-Path -LiteralPath $p -PathType Container) { return $p }
+    $parent = Split-Path $p -Parent
+    if ($parent -and (Test-Path -LiteralPath $parent -PathType Container)) { return $parent }
+  }
+  foreach ($p in @($script:guiCfg.scanFolders)) {
+    if ($p -and (Test-Path -LiteralPath $p -PathType Container)) { return [string]$p }
+  }
+  return ''
+}
+function script:Invoke-CleanRenameMove($res) {
+  $start = Get-CleanActionStartFolder $res
+  $folder = Choose-FolderForMove $start
+  if ($folder) { [void](Move-PathWithDialog $folder (Get-PreferredMoveRoot $folder)) }
+}
+function script:Invoke-CleanRunExe($res, [bool]$SystemEnhancedDpi = $false) {
+  $start = Get-CleanActionStartFolder $res
+  $exe = Choose-ExecutableFile $start
+  if (-not $exe) { return }
+  if (-not [IO.Path]::GetExtension($exe).Equals('.exe', [StringComparison]::OrdinalIgnoreCase)) {
+    [System.Windows.MessageBox]::Show('Choose an .exe file to run.','scan-av') | Out-Null
+    return
+  }
+  Run-CleanExecutable $exe $SystemEnhancedDpi
+}
+function script:Show-CleanNextStepDialog($res) {
+  $dlg = New-Object System.Windows.Window
+  $dlg.Title = 'Scan complete'
+  $dlg.Width = 560; $dlg.SizeToContent = 'Height'; $dlg.ResizeMode = 'NoResize'
+  $dlg.WindowStartupLocation = 'CenterOwner'; $dlg.Owner = $script:win
+  $dlg.Background = (WBrush '#070910'); $dlg.Foreground = (WBrush '#FFFFFF'); $dlg.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
+  $dlg.Tag = 'Close'
+
+  $panel = New-Object System.Windows.Controls.StackPanel
+  $panel.Margin = New-Object System.Windows.Thickness 24
+
+  $title = New-Object System.Windows.Controls.TextBlock
+  $title.Text = 'All clean'; $title.FontSize = 24; $title.FontWeight = 'SemiBold'; $title.Foreground = (WBrush '#CFF7D8'); $title.Margin = New-Object System.Windows.Thickness 0,0,0,8
+  [void]$panel.Children.Add($title)
+
+  $summary = New-Object System.Windows.Controls.TextBlock
+  $scanned = [int]$res.scanned
+  $skipped = [int]$res.skipped
+  $summary.Text = ("No threats were found in {0} scanned item(s){1}. Choose next step." -f $scanned, $(if ($skipped) { " ($skipped unchanged item(s) skipped)" } else { '' }))
+  $summary.FontSize = 14; $summary.Foreground = (WBrush '#C7CEDA'); $summary.TextWrapping = 'Wrap'; $summary.Margin = New-Object System.Windows.Thickness 0,0,0,18
+  [void]$panel.Children.Add($summary)
+
+  $compat = New-Object System.Windows.Controls.CheckBox
+  $compat.Content = 'Run EXE with compatibility settings'
+  $compat.FontSize = 14; $compat.Foreground = (WBrush '#C7CEDA'); $compat.Margin = New-Object System.Windows.Thickness 0,0,0,18
+  [void]$panel.Children.Add($compat)
+
+  $buttons = New-Object System.Windows.Controls.StackPanel
+  $buttons.Orientation = 'Horizontal'; $buttons.HorizontalAlignment = 'Right'
+  $close = New-Object System.Windows.Controls.Button; $close.Content = 'Close'; $close.MinWidth = 96; $close.Margin = New-Object System.Windows.Thickness 0,0,10,0
+  $move = New-Object System.Windows.Controls.Button; $move.Content = 'Rename + Move Folder'; $move.MinWidth = 176; $move.Margin = New-Object System.Windows.Thickness 0,0,10,0
+  $run = New-Object System.Windows.Controls.Button; $run.Content = 'Run EXE'; $run.MinWidth = 104
+  try { $close.Style = $script:win.FindResource('Soft'); $move.Style = $script:win.FindResource('Soft'); $run.Style = $script:win.FindResource('Primary') } catch {}
+  $close.Add_Click({ $dlg.Tag = 'Close'; $dlg.DialogResult = $false; $dlg.Close() })
+  $move.Add_Click({ $dlg.Tag = 'Move'; $dlg.DialogResult = $true; $dlg.Close() })
+  $run.Add_Click({ $dlg.Tag = 'Run'; $dlg.DialogResult = $true; $dlg.Close() })
+  [void]$buttons.Children.Add($close); [void]$buttons.Children.Add($move); [void]$buttons.Children.Add($run)
+  [void]$panel.Children.Add($buttons)
+  $dlg.Content = $panel
+
+  [void]$dlg.ShowDialog()
+  switch ([string]$dlg.Tag) {
+    'Move' { Invoke-CleanRenameMove $res }
+    'Run'  { Invoke-CleanRunExe $res ([bool]$compat.IsChecked) }
+  }
+}
+
+# Render last-results.json threat cards above the raw console output. Clean runs
+# use a modal next-step dialog instead of inline per-item cards.
 function script:Show-RunResults($res) {
   if (-not $script:runResults) { return }
   $script:runResults.Children.Clear()
   $threats = @($res.threats)
   $clean = @($res.clean)
   if (-not $threats.Count -and (-not $clean.Count -or [int]$res.failed -gt 0)) { $script:runResultsWrap.Visibility = 'Collapsed'; return }
+  if (-not $threats.Count -and $clean.Count) {
+    $script:runResultsWrap.Visibility = 'Collapsed'
+    Show-CleanNextStepDialog $res
+    return
+  }
   if ($threats.Count) {
     $script:runResultsWrap.Background = (WBrush '#170D12')
     $script:runResultsWrap.BorderBrush = (WBrush '#5A2430')
@@ -2052,85 +2136,6 @@ function script:Show-RunResults($res) {
     [void]$sp.Children.Add($btns)
     $card.Child = $sp
     [void]$script:runResults.Children.Add($card)
-  }
-  if (-not $threats.Count -and $clean.Count) {
-    $head = New-Object System.Windows.Controls.TextBlock
-    $head.Text = 'Clean - choose next step'
-    $head.FontSize = 16; $head.FontWeight = 'SemiBold'; $head.Foreground = (WBrush '#54D98C'); $head.Margin = New-Object System.Windows.Thickness 0,0,0,10
-    [void]$script:runResults.Children.Add($head)
-    foreach ($c in $clean) {
-      if (-not $c.target) { continue }
-      $card = New-Object System.Windows.Controls.Border
-      $card.Background = (WBrush '#102015'); $card.CornerRadius = New-Object System.Windows.CornerRadius 10
-      $card.BorderBrush = (WBrush '#255A35'); $card.BorderThickness = New-Object System.Windows.Thickness 1
-      $card.Padding = New-Object System.Windows.Thickness 12,10,12,10; $card.Margin = New-Object System.Windows.Thickness 0,0,0,8
-      $sp = New-Object System.Windows.Controls.StackPanel
-
-      $kind = if ($c.kind) { [string]$c.kind } else { 'clean item' }
-      $h = New-Object System.Windows.Controls.TextBlock
-      $h.Text = ("CLEAN: {0}   ({1})" -f $(if ($c.name) { $c.name } else { Split-Path ([string]$c.target) -Leaf }), $kind)
-      $h.FontSize = 14; $h.FontWeight = 'SemiBold'; $h.Foreground = (WBrush '#CFF7D8'); $h.TextWrapping = 'Wrap'
-      [void]$sp.Children.Add($h)
-      $p = New-Object System.Windows.Controls.TextBlock
-      $p.Text = [string]$c.target; $p.FontSize = 12; $p.Foreground = (WBrush '#8A93A6'); $p.TextWrapping = 'Wrap'; $p.Margin = New-Object System.Windows.Thickness 0,2,0,0
-      [void]$sp.Children.Add($p)
-
-      $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.Margin = New-Object System.Windows.Thickness 0,8,0,0
-      $open = New-Object System.Windows.Controls.Button; $open.Style = $script:win.FindResource('Soft'); $open.Content = 'Open'; $open.Margin = New-Object System.Windows.Thickness 0,0,10,0; $open.Tag = [string]$c.target
-      $open.Add_Click({ param($s,$e) Open-PathAction ([string]$s.Tag) })
-      [void]$btns.Children.Add($open)
-
-      $preferred = Get-PreferredMoveRoot ([string]$c.target)
-      if ($preferred) {
-        $mv = New-Object System.Windows.Controls.Button; $mv.Style = $script:win.FindResource('Soft'); $mv.Content = 'Move to Folder'; $mv.Margin = New-Object System.Windows.Thickness 0,0,10,0; $mv.Tag = [pscustomobject]@{ Path = [string]$c.target; Destination = $preferred }
-        $mv.Add_Click({
-          param($s,$e)
-          $tag = $s.Tag
-          $newPath = Move-PathWithDialog ([string]$tag.Path) ([string]$tag.Destination)
-          if ($newPath) { $s.Content = 'Moved'; $s.IsEnabled = $false }
-        })
-        [void]$btns.Children.Add($mv)
-      }
-
-      $rename = New-Object System.Windows.Controls.Button; $rename.Style = $script:win.FindResource('Soft'); $rename.Content = 'Rename + Move'; $rename.Margin = New-Object System.Windows.Thickness 0,0,10,0; $rename.Tag = [string]$c.target
-      $rename.Add_Click({
-        param($s,$e)
-        $newPath = Move-PathWithDialog ([string]$s.Tag) (Get-PreferredMoveRoot ([string]$s.Tag))
-        if ($newPath) { $s.Content = 'Moved'; $s.IsEnabled = $false }
-      })
-      [void]$btns.Children.Add($rename)
-
-      if ($c.isFolder) {
-        $pick = New-Object System.Windows.Controls.Button; $pick.Style = $script:win.FindResource('Soft'); $pick.Content = 'Choose File'; $pick.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pick.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $false }
-        $pick.Add_Click({
-          param($s,$e)
-          $tag = $s.Tag
-          $fileToRun = Choose-ExecutableFile ([string]$tag.Folder)
-          if ($fileToRun) { Run-CleanExecutable $fileToRun ([bool]$tag.Dpi) }
-        })
-        [void]$btns.Children.Add($pick)
-
-        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose File (Compatibility)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
-        $pickDpi.Add_Click({
-          param($s,$e)
-          $tag = $s.Tag
-          $fileToRun = Choose-ExecutableFile ([string]$tag.Folder)
-          if ($fileToRun) { Run-CleanExecutable $fileToRun ([bool]$tag.Dpi) }
-        })
-        [void]$btns.Children.Add($pickDpi)
-      } elseif ($c.runnablePath) {
-        $run = New-Object System.Windows.Controls.Button; $run.Style = $script:win.FindResource('Primary'); $run.Content = 'Run File'; $run.Margin = New-Object System.Windows.Thickness 0,0,10,0; $run.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $false }
-        $run.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
-        [void]$btns.Children.Add($run)
-
-        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run File (Compatibility)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $true }
-        $runDpi.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
-        [void]$btns.Children.Add($runDpi)
-      }
-      [void]$sp.Children.Add($btns)
-      $card.Child = $sp
-      [void]$script:runResults.Children.Add($card)
-    }
   }
   $script:runResultsWrap.Visibility = 'Visible'
 }

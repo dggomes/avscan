@@ -72,7 +72,7 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - Folder cards include quick actions to open in Explorer, move/rename into another configured scan folder, or edit the display label.
 - Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder.
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
-- Clean scan results show next-step cards: open the item, move/rename it into another configured scan folder, choose a file to run, or launch an `.exe` with Windows' **System (Enhanced)** high-DPI compatibility override.
+- Clean scan results show a next-step modal: close, choose a folder to rename/move into another configured scan folder, or choose an `.exe` to run. The run action can apply Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
 - Header controls can hide the app to the tray or exit it explicitly; the tray menu can reopen or exit the app.
 
