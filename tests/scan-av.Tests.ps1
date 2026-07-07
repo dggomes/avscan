@@ -43,7 +43,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -61,6 +61,12 @@ Assert ($restartFn -and $restartFn.Extent.Text -match 'Ensure-StandaloneLauncher
   'app update restart uses ScanAV.exe launcher'
 Assert ($src -notmatch "Start-Process -FilePath 'powershell\.exe'.*-Gui") `
   'app update restart does not relaunch through powershell.exe'
+$addFolderFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Add-ScanFolderDialog' -or $n.Name -eq 'script:Add-ScanFolderDialog') }, $true) | Select-Object -First 1
+$knownNetworkFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Get-KnownNetworkFolders' -or $n.Name -eq 'script:Get-KnownNetworkFolders') }, $true) | Select-Object -First 1
+Assert ($addFolderFn -and $addFolderFn.Extent.Text -match 'Known network locations' -and $addFolderFn.Extent.Text -match 'UNC path') `
+  'add folder dialog supports network locations and manual UNC paths'
+Assert ($knownNetworkFn -and $knownNetworkFn.Extent.Text -match "HKCU:\\Network" -and $knownNetworkFn.Extent.Text -match 'Network Shortcuts' -and $knownNetworkFn.Extent.Text -match 'DisplayRoot') `
+  'known network folders include mapped drives and Explorer network shortcuts'
 
 # ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {

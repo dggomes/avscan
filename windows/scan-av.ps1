@@ -1741,19 +1741,154 @@ function script:Set-FolderVtAll([string]$path, [bool]$v) {
   Save-GuiCfg
 }
 
-# Folder-picker used by both the dashboard "Add Folder" tile and the "Add" button
-# in the Scan Targets header: pick a folder, optionally name it, save + rebuild.
-function script:Add-ScanFolderDialog {
-  $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dlg.Description = 'Pick a folder to add to the scan list'
-  if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
-  $p = $dlg.SelectedPath
-  if (@($script:guiCfg.scanFolders) -contains $p) { [System.Windows.MessageBox]::Show('That folder is already in the scan list.','scan-av') | Out-Null; return }
+# Folder picker used by both the dashboard "Add Folder" tile and the "Add" button
+# in the Scan Targets header. It includes manual path entry because elevated apps
+# may not see all network drives mapped in the user's unelevated Explorer session.
+function script:Normalize-ScanFolderPath([string]$path) {
+  if (-not $path) { return '' }
+  $p = [Environment]::ExpandEnvironmentVariables($path.Trim().Trim('"'))
+  if ($p -match '^file:') {
+    try { $p = ([Uri]$p).LocalPath } catch {}
+  }
+  try {
+    $full = [IO.Path]::GetFullPath($p)
+    $root = [IO.Path]::GetPathRoot($full)
+    if ($root -and [string]::Equals($full.TrimEnd('\','/'), $root.TrimEnd('\','/'), [StringComparison]::OrdinalIgnoreCase)) { return $root }
+    return $full.TrimEnd('\','/')
+  } catch { return $p.TrimEnd('\','/') }
+}
+function script:Get-KnownNetworkFolders {
+  $items = New-Object System.Collections.Generic.List[object]
+  $seen = @{}
+  function local:AddKnown([string]$path, [string]$label) {
+    $p = Normalize-ScanFolderPath $path
+    if (-not $p) { return }
+    $key = $p.ToLowerInvariant()
+    if ($seen.ContainsKey($key)) { return }
+    $seen[$key] = $true
+    $items.Add([pscustomobject]@{ Path = $p; Label = $(if ($label) { $label } else { $p }) }) | Out-Null
+  }
+  try {
+    Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.DisplayRoot } | ForEach-Object {
+      AddKnown ([string]$_.DisplayRoot) ("{0}: {1}" -f $_.Name, $_.DisplayRoot)
+    }
+  } catch {}
+  try {
+    if (Test-Path 'HKCU:\Network') {
+      Get-ChildItem 'HKCU:\Network' -ErrorAction SilentlyContinue | ForEach-Object {
+        $remote = (Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue).RemotePath
+        if ($remote) { AddKnown ([string]$remote) ("{0}: {1}" -f $_.PSChildName, $remote) }
+      }
+    }
+  } catch {}
+  try {
+    $shortcutRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Network Shortcuts'
+    if (Test-Path -LiteralPath $shortcutRoot) {
+      $ws = New-Object -ComObject WScript.Shell
+      Get-ChildItem -LiteralPath $shortcutRoot -Recurse -File -Force -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+          $lnk = $ws.CreateShortcut($_.FullName)
+          if ($lnk.TargetPath) { AddKnown ([string]$lnk.TargetPath) ("{0}: {1}" -f $_.BaseName, $lnk.TargetPath) }
+        } catch {}
+      }
+    }
+  } catch {}
+  return @($items)
+}
+function script:Add-ScanFolderPath([string]$path) {
+  $p = Normalize-ScanFolderPath $path
+  if (-not $p) { [System.Windows.MessageBox]::Show('Enter or choose a folder path.','scan-av') | Out-Null; return $false }
+  if (-not (Test-Path -LiteralPath $p -PathType Container)) {
+    [System.Windows.MessageBox]::Show("Could not access this folder:`n$p`n`nFor network locations, try the UNC path (for example \\server\share) instead of a mapped drive letter.",'scan-av') | Out-Null
+    return $false
+  }
+  $exists = @($script:guiCfg.scanFolders) | Where-Object { [string]::Equals((Normalize-ScanFolderPath ([string]$_)), $p, [StringComparison]::OrdinalIgnoreCase) }
+  if ($exists.Count) { [System.Windows.MessageBox]::Show('That folder is already in the scan list.','scan-av') | Out-Null; return $false }
   $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) + $p)
   Add-Type -AssemblyName Microsoft.VisualBasic
-  $nm = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder (optional):`n{0}" -f $p), 'Folder name', (Split-Path $p -Leaf))
+  $defaultName = Split-Path $p -Leaf
+  if (-not $defaultName) { $defaultName = $p }
+  $nm = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder (optional):`n{0}" -f $p), 'Folder name', $defaultName)
   if ($null -ne $nm -and $nm.Trim() -ne '') { Set-FolderName $p ($nm.Trim()) } else { Save-GuiCfg }
   Rebuild-Roots
+  return $true
+}
+function script:Add-ScanFolderDialog {
+  $dlg = New-Object System.Windows.Window
+  $dlg.Title = 'Add scan folder'
+  $dlg.Width = 680; $dlg.SizeToContent = 'Height'; $dlg.ResizeMode = 'NoResize'
+  $dlg.WindowStartupLocation = 'CenterOwner'; $dlg.Owner = $script:win
+  $dlg.Background = (WBrush '#070910'); $dlg.Foreground = (WBrush '#FFFFFF'); $dlg.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
+
+  $panel = New-Object System.Windows.Controls.StackPanel
+  $panel.Margin = New-Object System.Windows.Thickness 22
+  $title = New-Object System.Windows.Controls.TextBlock
+  $title.Text = 'Add scan folder'; $title.FontSize = 22; $title.FontWeight = 'SemiBold'; $title.Margin = New-Object System.Windows.Thickness 0,0,0,8
+  [void]$panel.Children.Add($title)
+  $help = New-Object System.Windows.Controls.TextBlock
+  $help.Text = 'Choose a local folder, select a known network location, or paste a UNC path.'; $help.FontSize = 13; $help.Foreground = (WBrush '#8A93A6'); $help.TextWrapping = 'Wrap'; $help.Margin = New-Object System.Windows.Thickness 0,0,0,14
+  [void]$panel.Children.Add($help)
+
+  $pathRow = New-Object System.Windows.Controls.Grid
+  $pathRow.Margin = New-Object System.Windows.Thickness 0,0,0,14
+  [void]$pathRow.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+  $browseCol = New-Object System.Windows.Controls.ColumnDefinition; $browseCol.Width = [System.Windows.GridLength]::Auto
+  [void]$pathRow.ColumnDefinitions.Add($browseCol)
+  $pathBox = New-Object System.Windows.Controls.TextBox
+  $pathBox.MinHeight = 34; $pathBox.Padding = New-Object System.Windows.Thickness 8,5,8,5; $pathBox.Background = (WBrush '#11151F'); $pathBox.Foreground = (WBrush '#FFFFFF'); $pathBox.BorderBrush = (WBrush '#222A38')
+  [System.Windows.Controls.Grid]::SetColumn($pathBox, 0)
+  [void]$pathRow.Children.Add($pathBox)
+  $browse = New-Object System.Windows.Controls.Button
+  $browse.Content = 'Browse'; $browse.MinWidth = 92; $browse.Margin = New-Object System.Windows.Thickness 10,0,0,0
+  try { $browse.Style = $script:win.FindResource('Soft') } catch {}
+  [System.Windows.Controls.Grid]::SetColumn($browse, 1)
+  [void]$pathRow.Children.Add($browse)
+  [void]$panel.Children.Add($pathRow)
+
+  $known = @(Get-KnownNetworkFolders)
+  $knownLabel = New-Object System.Windows.Controls.TextBlock
+  $knownLabel.Text = 'Known network locations'; $knownLabel.FontSize = 13; $knownLabel.Foreground = (WBrush '#C7CEDA'); $knownLabel.Margin = New-Object System.Windows.Thickness 0,0,0,6
+  [void]$panel.Children.Add($knownLabel)
+  $list = New-Object System.Windows.Controls.ListBox
+  $list.MinHeight = 120; $list.MaxHeight = 180; $list.Background = (WBrush '#0B0F18'); $list.Foreground = (WBrush '#FFFFFF'); $list.BorderBrush = (WBrush '#222A38'); $list.Margin = New-Object System.Windows.Thickness 0,0,0,16
+  if ($known.Count) {
+    foreach ($k in $known) {
+      $item = New-Object System.Windows.Controls.ListBoxItem
+      $item.Content = [string]$k.Label
+      $item.Tag = [string]$k.Path
+      [void]$list.Items.Add($item)
+    }
+  } else {
+    $item = New-Object System.Windows.Controls.ListBoxItem
+    $item.Content = 'No mapped network locations found. Paste a UNC path above.'
+    $item.IsEnabled = $false
+    [void]$list.Items.Add($item)
+  }
+  $list.Add_SelectionChanged({ if ($list.SelectedItem -and $list.SelectedItem.Tag) { $pathBox.Text = [string]$list.SelectedItem.Tag } })
+  [void]$panel.Children.Add($list)
+
+  $buttons = New-Object System.Windows.Controls.StackPanel
+  $buttons.Orientation = 'Horizontal'; $buttons.HorizontalAlignment = 'Right'
+  $cancel = New-Object System.Windows.Controls.Button; $cancel.Content = 'Cancel'; $cancel.MinWidth = 96; $cancel.Margin = New-Object System.Windows.Thickness 0,0,10,0
+  $add = New-Object System.Windows.Controls.Button; $add.Content = 'Add Folder'; $add.MinWidth = 118
+  try { $cancel.Style = $script:win.FindResource('Soft'); $add.Style = $script:win.FindResource('Primary') } catch {}
+  $browse.Add_Click({
+    $fb = New-Object System.Windows.Forms.FolderBrowserDialog
+    $fb.Description = 'Pick a folder to add to the scan list'
+    if ($pathBox.Text -and (Test-Path -LiteralPath $pathBox.Text -PathType Container)) { $fb.SelectedPath = $pathBox.Text }
+    if ($fb.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $pathBox.Text = $fb.SelectedPath }
+  })
+  $cancel.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+  $add.Add_Click({
+    if (Add-ScanFolderPath ([string]$pathBox.Text)) {
+      $dlg.DialogResult = $true
+      $dlg.Close()
+    }
+  })
+  [void]$buttons.Children.Add($cancel); [void]$buttons.Children.Add($add)
+  [void]$panel.Children.Add($buttons)
+  $dlg.Content = $panel
+  [void]$dlg.ShowDialog()
 }
   function script:Rename-FolderNode($node) {
     Add-Type -AssemblyName Microsoft.VisualBasic
