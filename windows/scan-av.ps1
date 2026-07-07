@@ -1695,7 +1695,7 @@ function script:Collect-Targets {
   # Return the list unrolled (NOT ,$tops): the callers wrap with @(Collect-Targets),
   # and ,$tops would make that a NESTED array - a single element that is the whole
   # path list, which then string-interpolates (space-joined) into one bogus path
-  # like "C:\Games C:\Users\...\Games". Plain $tops keeps each path separate.
+  # like "C:\Scanned C:\Users\...\Downloads". Plain $tops keeps each path separate.
   $tops
 }
 function script:Save-GuiCfg { ($script:guiCfg | ConvertTo-Json -Depth 6) | Set-Content -Path $CfgFile -Encoding UTF8 }
@@ -1796,15 +1796,14 @@ function script:Add-ScanFolderDialog {
     }
     Save-GuiCfg
   }
-  function script:Get-PreferredGamesRoot([string]$path) {
+  function script:Get-PreferredMoveRoot([string]$path) {
     $roots = @(@($script:guiCfg.scanFolders) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
     $candidates = @($roots | Where-Object {
       $full = [IO.Path]::GetFullPath([string]$_).TrimEnd('\')
       (-not $path) -or -not ([IO.Path]::GetFullPath($path).TrimEnd('\').Equals($full, [StringComparison]::OrdinalIgnoreCase))
     })
-    $games = @($candidates | Where-Object { ((Split-Path $_ -Leaf) -match '(?i)^games?$') -or ($_ -match '(?i)\\games?(\\|$)') })
-    if ($games.Count) { return [string]$games[0] }
-    return $null
+    if ($candidates.Count) { return [string]$candidates[0] }
+    return ''
   }
   function script:Show-MoveFolderDialog($node, [string]$PreferredDestination = '') {
     $roots = @(@($script:guiCfg.scanFolders) | Where-Object {
@@ -1910,15 +1909,15 @@ function script:Add-ScanFolderDialog {
   function script:Move-FolderNode($node) {
     if ($node) { Move-PathWithDialog $node.Path }
   }
-  function script:Choose-InstallerFile([string]$folder) {
+  function script:Choose-ExecutableFile([string]$folder) {
     if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) {
-      [System.Windows.MessageBox]::Show('Installer folder not found.','scan-av') | Out-Null
+      [System.Windows.MessageBox]::Show('Folder not found.','scan-av') | Out-Null
       return $null
     }
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = 'Choose installer to run'
+    $dlg.Title = 'Choose file to run'
     $dlg.InitialDirectory = $folder
-    $dlg.Filter = 'Installers (*.exe;*.msi;*.msix;*.appx)|*.exe;*.msi;*.msix;*.appx|All files (*.*)|*.*'
+    $dlg.Filter = 'Executable files (*.exe)|*.exe|Launchable files (*.exe;*.msi;*.msix;*.appx)|*.exe;*.msi;*.msix;*.appx|All files (*.*)|*.*'
     $dlg.CheckFileExists = $true
     $dlg.Multiselect = $false
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.FileName }
@@ -1930,23 +1929,23 @@ function script:Add-ScanFolderDialog {
     New-Item -Path $key -Force | Out-Null
     New-ItemProperty -Path $key -Name $full -Value '~ GDIDPISCALING DPIUNAWARE' -PropertyType String -Force | Out-Null
   }
-  function script:Run-CleanInstaller([string]$path, [bool]$SystemEnhancedDpi = $false) {
+  function script:Run-CleanExecutable([string]$path, [bool]$SystemEnhancedDpi = $false) {
     if (-not $path -or -not (Test-Path -LiteralPath $path)) {
-      [System.Windows.MessageBox]::Show('Installer not found.','scan-av') | Out-Null
+      [System.Windows.MessageBox]::Show('File not found.','scan-av') | Out-Null
       return
     }
     $mode = if ($SystemEnhancedDpi) { "`n`nHigh DPI scaling override: System (Enhanced)" } else { '' }
-    if ([System.Windows.MessageBox]::Show(("Run this clean installer now?`n`n{0}{1}" -f $path, $mode),'scan-av','YesNo','Question') -ne 'Yes') { return }
+    if ([System.Windows.MessageBox]::Show(("Run this clean file now?`n`n{0}{1}" -f $path, $mode),'scan-av','YesNo','Question') -ne 'Yes') { return }
     try {
       if ($SystemEnhancedDpi) {
         if ([IO.Path]::GetExtension($path).Equals('.exe', [StringComparison]::OrdinalIgnoreCase)) {
           Set-SystemEnhancedDpi $path
         } else {
-          [System.Windows.MessageBox]::Show('The System (Enhanced) DPI override can be applied to .exe installers only. This installer will run normally.','scan-av') | Out-Null
+          [System.Windows.MessageBox]::Show('The System (Enhanced) DPI override can be applied to .exe files only. This file will run normally.','scan-av') | Out-Null
         }
       }
       Start-Process -FilePath $path -WorkingDirectory (Split-Path $path -Parent)
-    } catch { [System.Windows.MessageBox]::Show("Could not start installer:`n$_",'scan-av') | Out-Null }
+    } catch { [System.Windows.MessageBox]::Show("Could not start file:`n$_",'scan-av') | Out-Null }
   }
 
   function script:Ensure-TrayIcon {
@@ -2081,9 +2080,9 @@ function script:Show-RunResults($res) {
       $open.Add_Click({ param($s,$e) Open-PathAction ([string]$s.Tag) })
       [void]$btns.Children.Add($open)
 
-      $preferred = Get-PreferredGamesRoot ([string]$c.target)
+      $preferred = Get-PreferredMoveRoot ([string]$c.target)
       if ($preferred) {
-        $mv = New-Object System.Windows.Controls.Button; $mv.Style = $script:win.FindResource('Soft'); $mv.Content = 'Move to Games'; $mv.Margin = New-Object System.Windows.Thickness 0,0,10,0; $mv.Tag = [pscustomobject]@{ Path = [string]$c.target; Destination = $preferred }
+        $mv = New-Object System.Windows.Controls.Button; $mv.Style = $script:win.FindResource('Soft'); $mv.Content = 'Move to Folder'; $mv.Margin = New-Object System.Windows.Thickness 0,0,10,0; $mv.Tag = [pscustomobject]@{ Path = [string]$c.target; Destination = $preferred }
         $mv.Add_Click({
           param($s,$e)
           $tag = $s.Tag
@@ -2096,36 +2095,36 @@ function script:Show-RunResults($res) {
       $rename = New-Object System.Windows.Controls.Button; $rename.Style = $script:win.FindResource('Soft'); $rename.Content = 'Rename + Move'; $rename.Margin = New-Object System.Windows.Thickness 0,0,10,0; $rename.Tag = [string]$c.target
       $rename.Add_Click({
         param($s,$e)
-        $newPath = Move-PathWithDialog ([string]$s.Tag) (Get-PreferredGamesRoot ([string]$s.Tag))
+        $newPath = Move-PathWithDialog ([string]$s.Tag) (Get-PreferredMoveRoot ([string]$s.Tag))
         if ($newPath) { $s.Content = 'Moved'; $s.IsEnabled = $false }
       })
       [void]$btns.Children.Add($rename)
 
       if ($c.isFolder) {
-        $pick = New-Object System.Windows.Controls.Button; $pick.Style = $script:win.FindResource('Soft'); $pick.Content = 'Choose Installer'; $pick.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pick.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $false }
+        $pick = New-Object System.Windows.Controls.Button; $pick.Style = $script:win.FindResource('Soft'); $pick.Content = 'Choose File'; $pick.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pick.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $false }
         $pick.Add_Click({
           param($s,$e)
           $tag = $s.Tag
-          $installer = Choose-InstallerFile ([string]$tag.Folder)
-          if ($installer) { Run-CleanInstaller $installer ([bool]$tag.Dpi) }
+          $fileToRun = Choose-ExecutableFile ([string]$tag.Folder)
+          if ($fileToRun) { Run-CleanExecutable $fileToRun ([bool]$tag.Dpi) }
         })
         [void]$btns.Children.Add($pick)
 
-        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose Installer (DPI)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
+        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose File (DPI)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
         $pickDpi.Add_Click({
           param($s,$e)
           $tag = $s.Tag
-          $installer = Choose-InstallerFile ([string]$tag.Folder)
-          if ($installer) { Run-CleanInstaller $installer ([bool]$tag.Dpi) }
+          $fileToRun = Choose-ExecutableFile ([string]$tag.Folder)
+          if ($fileToRun) { Run-CleanExecutable $fileToRun ([bool]$tag.Dpi) }
         })
         [void]$btns.Children.Add($pickDpi)
-      } elseif ($c.installerPath) {
-        $run = New-Object System.Windows.Controls.Button; $run.Style = $script:win.FindResource('Primary'); $run.Content = 'Run Installer'; $run.Margin = New-Object System.Windows.Thickness 0,0,10,0; $run.Tag = [pscustomobject]@{ Path = [string]$c.installerPath; Dpi = $false }
-        $run.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanInstaller ([string]$tag.Path) ([bool]$tag.Dpi) })
+      } elseif ($c.runnablePath) {
+        $run = New-Object System.Windows.Controls.Button; $run.Style = $script:win.FindResource('Primary'); $run.Content = 'Run File'; $run.Margin = New-Object System.Windows.Thickness 0,0,10,0; $run.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $false }
+        $run.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
         [void]$btns.Children.Add($run)
 
-        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run Installer (DPI)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.installerPath; Dpi = $true }
-        $runDpi.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanInstaller ([string]$tag.Path) ([bool]$tag.Dpi) })
+        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run File (DPI)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $true }
+        $runDpi.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
         [void]$btns.Children.Add($runDpi)
       }
       [void]$sp.Children.Add($btns)
@@ -2633,7 +2632,7 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
   try { (& $find 'VerLabel').Text = "v$ScanAvVersion"; (& $find 'BuildLabel').Text = "Build $ScanAvBuild"; (& $find 'AboutVersion').Text = "Version $ScanAvVersion   -   Build $ScanAvBuild" } catch {}
   Rebuild-Roots
   # Folder-watch: poll the visible folders every few seconds and auto-refresh the
-  # tree when a sub-folder is added/removed on disk (e.g. a new game finishes
+  # tree when a sub-folder is added/removed on disk (e.g. new content finishes
   # downloading) - no need to leave/return to the app or hit Refresh manually.
   $script:folderFingerprint = Get-VisibleFingerprint
   $script:folderWatchTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -2990,12 +2989,12 @@ if ($incremental -and -not $rescanAll -and -not $NoPrompt -and $cache.Count -gt 
 
 # Expand targets into per-child units so unchanged items get skipped on later runs.
 # A target is a LIBRARY only if it's one of the user's CONFIGURED scan folders (a
-# parent the user is watching, e.g. "Games"): it's expanded so each sub-folder/file
+# parent the user is watching): it's expanded so each sub-folder/file
 # is its own cache unit, which means a NEW or moved-in sub-folder is always a fresh
 # unit that gets scanned - never hidden inside the parent's single cache entry.
-# Anything else (a specific game picked via Scan Checked, a context-menu folder, a
+# Anything else (a specific folder picked via Scan Checked, a context-menu folder, a
 # sub-folder of a library) is CONTENT: scanned as ONE recursive unit. That avoids
-# splitting a game into its internal folders, and avoids the per-file clamscan
+# splitting content into its internal folders, and avoids the per-file clamscan
 # DB-reload storm (each clamscan invocation reloads the whole ~3.6M-sig DB).
 $rootSet = @{}
 foreach ($rf in @($cfg.scanFolders)) { if ($rf) { $rootSet[([string]$rf).TrimEnd('\','/').ToLowerInvariant()] = $true } }
@@ -3007,12 +3006,12 @@ foreach ($t in $targets) {
     $subDirs    = @($kids | Where-Object { $_.PSIsContainer })
     $looseFiles = @($kids | Where-Object { -not $_.PSIsContainer })
     if ($subDirs.Count -gt 0) {
-      $subDirs    | ForEach-Object { $units += $_.FullName }   # each game = its own unit
+      $subDirs    | ForEach-Object { $units += $_.FullName }   # each immediate child folder = its own unit
       $looseFiles | ForEach-Object { $units += $_.FullName }   # loose archives/files at the root
     } else {
       $units += $t   # library with no sub-folders yet -> scan whole
     }
-  } else { $units += $t }   # a specific game / content folder -> one recursive scan
+  } else { $units += $t }   # a specific content folder -> one recursive scan
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -3161,43 +3160,44 @@ try {
        vtLink = $(if ($shas.Count) { 'https://www.virustotal.com/gui/file/' + $shas[0] } else { '' })
        qpaths = @($_.QPaths) }
   })
-  $installerName = '(?i)(^|[\s._-])(setup|install|installer|redist|vcredist|dxsetup)([\s._-]|$)'
+  $setupLikeName = '(?i)(^|[\s._-])(setup|install|installer|redist|vcredist|dxsetup)([\s._-]|$)'
   $cRecs = @($clean | ForEach-Object {
     $target = [string]$_.Target
     $name = Split-Path $target -Leaf
     $kind = 'clean item'
-    $installerPath = ''
+    $runnablePath = ''
     $isFolder = $false
     try {
       if (Test-Path -LiteralPath $target -PathType Container) {
         $isFolder = $true
-        $installer = Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue |
-          Where-Object { $_.Extension -match '^\.(msi|msix|appx|exe)$' -and ($_.BaseName -match $installerName) } |
+        $preferredExecutable = Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue |
+          Where-Object { $_.Extension -match '^\.(msi|msix|appx|exe)$' -and ($_.BaseName -match $setupLikeName) } |
           Select-Object -First 1
-        if ($installer) {
-          $kind = 'installer folder'
+        if ($preferredExecutable) {
+          $kind = 'folder with launchable file'
         } else {
           $exe = Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue -Filter *.exe | Select-Object -First 1
-          $kind = if ($exe) { 'portable folder' } else { 'clean folder' }
+          $kind = if ($exe) { 'folder with executable' } else { 'clean folder' }
         }
       } else {
         $ext = [IO.Path]::GetExtension($target).ToLowerInvariant()
         if ($ext -in @('.msi','.msix','.appx')) {
-          $kind = 'installer'
-          $installerPath = $target
-        } elseif ($ext -eq '.exe' -and ([IO.Path]::GetFileNameWithoutExtension($target) -match $installerName)) {
-          $kind = 'installer'
-          $installerPath = $target
+          $kind = 'launchable package'
+          $runnablePath = $target
+        } elseif ($ext -eq '.exe' -and ([IO.Path]::GetFileNameWithoutExtension($target) -match $setupLikeName)) {
+          $kind = 'launchable executable'
+          $runnablePath = $target
         } elseif ($ArchiveExt -contains $ext) {
           $kind = 'archive'
         } elseif ($ext -eq '.exe') {
           $kind = 'executable'
+          $runnablePath = $target
         } else {
           $kind = 'clean file'
         }
       }
     } catch {}
-    @{ target = $target; name = $name; kind = $kind; isFolder = $isFolder; installerPath = $installerPath }
+    @{ target = $target; name = $name; kind = $kind; isFolder = $isFolder; runnablePath = $runnablePath }
   })
   @{ utc = [DateTime]::UtcNow.ToString('o'); scanned = $all.Count; skipped = $skipped; failed = $failed.Count; threats = $tRecs; clean = $cRecs } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $AppDir 'last-results.json') -Encoding UTF8

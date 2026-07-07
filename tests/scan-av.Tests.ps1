@@ -42,12 +42,12 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredGamesRoot','Choose-InstallerFile','Set-SystemEnhancedDpi','Run-CleanInstaller','Show-MoveFolderDialog','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
 $showResultsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-RunResults' -or $n.Name -eq 'script:Show-RunResults') }, $true) | Select-Object -First 1
-Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose Installer' -and $showResultsFn.Extent.Text -match 'DPI') `
+Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose File' -and $showResultsFn.Extent.Text -match 'DPI') `
   'clean scan results expose next-step actions'
 
 # ---- 4. extract pure functions from the AST ----
@@ -83,20 +83,20 @@ Assert (($got.Count -eq 2) -and ($got[0] -eq 'C:\Users\dan\bad.exe') -and ($got[
   'Defender file: regex handles both formats and strips ->member' "got: $($got -join ' | ')"
 
 # ---- 6. ConvertFrom-ClamBatchLog: per-target attribution ----
-$targets = @('C:\Games\Alpha', 'C:\Games\Alpha Two', 'C:\Downloads\setup.exe')
+$targets = @('C:\Scanned\Alpha', 'C:\Scanned\Alpha Two', 'C:\Downloads\setup.exe')
 $lines = @(
-  'C:\Games\Alpha\bin\game.exe: OK',
-  'C:\Games\Alpha\data\big.bin: Heuristics.Limits.Exceeded.MaxFileSize FOUND',
-  'C:\Games\Alpha Two\loader.dll: Win.Trojan.Agent-999 FOUND',
-  'C:\Games\Alpha Two\readme.txt: OK',
-  "C:\Games\Alpha Two\locked.dat: Can't open file ERROR",
+  'C:\Scanned\Alpha\bin\app.exe: OK',
+  'C:\Scanned\Alpha\data\big.bin: Heuristics.Limits.Exceeded.MaxFileSize FOUND',
+  'C:\Scanned\Alpha Two\loader.dll: Win.Trojan.Agent-999 FOUND',
+  'C:\Scanned\Alpha Two\readme.txt: OK',
+  "C:\Scanned\Alpha Two\locked.dat: Can't open file ERROR",
   'C:\Downloads\setup.exe: OK',
   'C:\Elsewhere\stray.exe: OK',
   '----------- SCAN SUMMARY -----------',
   'Scanned files: 5'
 )
 $map = ConvertFrom-ClamBatchLog -Lines $lines -Targets $targets -Rc 1 -LogFile 'x.log'
-$a  = $map['C:\Games\Alpha']; $a2 = $map['C:\Games\Alpha Two']; $d = $map['C:\Downloads\setup.exe']
+$a  = $map['C:\Scanned\Alpha']; $a2 = $map['C:\Scanned\Alpha Two']; $d = $map['C:\Downloads\setup.exe']
 Assert ($a.Hits.Count -eq 0 -and $a.Skipped -eq 1 -and $a.Scanned -eq '2') 'batch: Alpha gets its skip, no bleed from "Alpha Two"' "hits=$($a.Hits.Count) skip=$($a.Skipped) scanned=$($a.Scanned)"
 Assert ($a2.Hits.Count -eq 1 -and $a2.Errors.Count -eq 1 -and $a2.Scanned -eq '2') 'batch: Alpha Two gets its hit + error' "hits=$($a2.Hits.Count) errs=$($a2.Errors.Count) scanned=$($a2.Scanned)"
 Assert ($d.Hits.Count -eq 0 -and $d.Scanned -eq '1') 'batch: single-file target attributed' "scanned=$($d.Scanned)"
@@ -104,19 +104,19 @@ Assert ($map.Keys.Count -eq 3) 'batch: stray path outside all targets ignored'
 
 # ---- 6b. Find-MovedCacheEntry: move-aware cache lookup ----
 $mvCache = @{
-  'C:\Downloads\GameX'   = [pscustomobject]@{ sig = 'D|120|987654|638600000000000000'; utc = '2026-07-01T00:00:00Z'; result = 'clean' }
+  'C:\Downloads\PackageX' = [pscustomobject]@{ sig = 'D|120|987654|638600000000000000'; utc = '2026-07-01T00:00:00Z'; result = 'clean' }
   'C:\Downloads\Other'   = [pscustomobject]@{ sig = 'D|5|100|638600000000000001';      utc = '2026-07-01T00:00:00Z'; result = 'clean' }
   'C:\Downloads\Empty'   = [pscustomobject]@{ sig = 'D|0|0|0';                          utc = '2026-07-01T00:00:00Z'; result = 'clean' }
 }
-Assert ((Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameX' -Sig 'D|120|987654|638600000000000000') -eq 'C:\Downloads\GameX') `
+Assert ((Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Scanned\PackageX' -Sig 'D|120|987654|638600000000000000') -eq 'C:\Downloads\PackageX') `
   'moved cache: same name + same signature at a new path matches'
-Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameY' -Sig 'D|120|987654|638600000000000000')) `
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Scanned\PackageY' -Sig 'D|120|987654|638600000000000000')) `
   'moved cache: different name does NOT match despite same signature'
-Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\GameX' -Sig 'D|120|987654|638600000000000099')) `
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Scanned\PackageX' -Sig 'D|120|987654|638600000000000099')) `
   'moved cache: changed content (different signature) does NOT match'
-Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Games\Empty' -Sig 'D|0|0|0')) `
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Scanned\Empty' -Sig 'D|0|0|0')) `
   'moved cache: empty-folder signature never matches (collides by design)'
-Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'C:\Downloads\GameX' -Sig 'D|120|987654|638600000000000000')) `
+Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'C:\Downloads\PackageX' -Sig 'D|120|987654|638600000000000000')) `
   'moved cache: the unit itself is not its own move source'
 
 # ---- 7. Get-VtStatusCode message fallback ----
@@ -124,7 +124,7 @@ try { throw 'The remote server returned an error: (404) Not Found.' } catch { $e
 Assert ((Get-VtStatusCode $e) -eq 404) 'Get-VtStatusCode message fallback -> 404'
 
 # ---- 8. elevation command builder keeps array params separate + parses ----
-$Bound = @{ Path = @('C:\Games', "C:\Users\dan's stuff"); RescanAll = [System.Management.Automation.SwitchParameter]::new($true); Engine = 'clamav' }
+$Bound = @{ Path = @('C:\Scanned', "C:\Users\dan's stuff"); RescanAll = [System.Management.Automation.SwitchParameter]::new($true); Engine = 'clamav' }
 function local:VQ([string]$s) { "'" + ($s -replace "'", "''") + "'" }
 $parts = @('&', (VQ 'C:\Apps\scan-av.ps1'))
 foreach ($k in $Bound.Keys) {

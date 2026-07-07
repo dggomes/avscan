@@ -12,7 +12,7 @@ Pointing a signature scanner straight at a large archive (a multi-gigabyte `.rar
 
 1. **ClamAV has a hard 2 GiB-per-file limit.** Large downloads frequently contain single data files bigger than that. ClamAV silently skips them and reports `OK` — a scan that inspected *nothing*. avscan detects these, reports them honestly as **skipped (not clean)**, and focuses the scan on the parts that matter.
 
-2. **Executable code is the real risk surface**, not the large opaque data blobs. avscan extracts just the executable/script files (`.exe`, `.dll`, installers, scripts) from an archive with 7-Zip, scans those thoroughly, then cleans up — fast, and it never wastes time on (or falsely clears) the large data files.
+2. **Executable code is the real risk surface**, not the large opaque data blobs. avscan extracts just the executable/script files (`.exe`, `.dll`, launchable packages, scripts) from an archive with 7-Zip, scans those thoroughly, then cleans up — fast, and it never wastes time on (or falsely clears) the large data files.
 
 It also distinguishes a **real detection** from noise:
 
@@ -72,7 +72,7 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - Folder cards include quick actions to open in Explorer, move/rename into another configured scan folder, or edit the display label.
 - Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder.
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
-- Clean scan results show next-step cards: open the item, move/rename it into the Games folder, choose an installer to run, or launch it with Windows' **System (Enhanced)** high-DPI compatibility override.
+- Clean scan results show next-step cards: open the item, move/rename it into another configured scan folder, choose a file to run, or launch an `.exe` with Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
 - Header controls can hide the app to the tray or exit it explicitly; the tray menu can reopen or exit the app.
 
