@@ -79,6 +79,8 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 The installer also creates `%LOCALAPPDATA%\ScanAV\ScanAV.exe`, a small standalone
 launcher for the desktop app. If you use a launcher such as ROG Armoury, point it
 at that EXE instead of the PowerShell script; app updates refresh it automatically.
+The normal desktop shortcut targets this EXE directly. The optional zero-prompt
+shortcut still targets the Windows scheduled task runner by design.
 
 ```powershell
 scan-av -Gui          # open the app from the command line

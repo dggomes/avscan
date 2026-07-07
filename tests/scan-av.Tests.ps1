@@ -23,8 +23,8 @@ $shortcutFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Lang
 $updateFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-FromGitHub' }, $true) | Select-Object -First 1
 Assert ($launcherFn -and $launcherFn.Extent.Text -match 'ScanAV\.exe' -and $launcherFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
   'standalone launcher function builds ScanAV.exe wrapper'
-Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
-  'desktop shortcut prefers ScanAV.exe and keeps PowerShell fallback'
+Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'Shortcut target:' -and $shortcutFn.Extent.Text -notmatch 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
+  'desktop shortcut targets ScanAV.exe and does not fall back to PowerShell'
 Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher') `
   'self-update refreshes standalone launcher'
 

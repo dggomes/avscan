@@ -498,7 +498,33 @@ public static class $typeName
       ErrorAction = 'Stop'
     }
     if ($compilerOptions.Count) { $addTypeArgs.CompilerOptions = ($compilerOptions -join ' ') }
-    Add-Type @addTypeArgs
+    $compileErr = $null
+    try {
+      Add-Type @addTypeArgs
+    } catch {
+      $compileErr = $_
+    }
+    if (-not (Test-Path $tmp)) {
+      $csPath = Join-Path $env:TEMP ('ScanAV_' + [Guid]::NewGuid().ToString('N') + '.cs')
+      Set-Content -Path $csPath -Value $source -Encoding UTF8
+      $cscCandidates = @()
+      try { $cscCandidates += (Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe') } catch {}
+      $cscCandidates += @(
+        (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+        (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+      )
+      $csc = @($cscCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
+      if (-not $csc) { throw "Could not find a C# compiler for ScanAV.exe. Add-Type error: $compileErr" }
+      $cscArgs = @('/nologo','/target:winexe',('/out:{0}' -f $tmp),'/reference:System.dll','/reference:System.Windows.Forms.dll')
+      if ($icon -and (Test-Path $icon.ico)) { $cscArgs += ('/win32icon:{0}' -f $icon.ico) }
+      $cscArgs += $csPath
+      $cscOut = & $csc @cscArgs 2>&1
+      $cscRc = $LASTEXITCODE
+      Remove-Item $csPath -Force -ErrorAction SilentlyContinue
+      if ($cscRc -ne 0 -or -not (Test-Path $tmp)) {
+        throw "Could not compile ScanAV.exe. Add-Type error: $compileErr`nC# compiler output:`n$($cscOut -join "`n")"
+      }
+    }
     try {
       Move-Item -Path $tmp -Destination $launcher -Force -ErrorAction Stop
     } catch {
@@ -544,18 +570,17 @@ function New-DesktopShortcut {
     $lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Scan-AV.lnk'
     $ws  = New-Object -ComObject WScript.Shell
     $lnk = $ws.CreateShortcut($lnkPath)
-    $launcher = Ensure-StandaloneLauncher -Quiet
-    if ($launcher -and (Test-Path $launcher)) {
-      $lnk.TargetPath = $launcher
-      $lnk.Arguments  = ''
-    } else {
-      $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-      # launch the GUI app (hidden console host + the window)
-      $lnk.Arguments  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" -Gui"
+    $launcher = Ensure-StandaloneLauncher
+    if (-not ($launcher -and (Test-Path $launcher))) {
+      Warn 'Desktop shortcut not changed: ScanAV.exe could not be created.'
+      Warn "Expected launcher path: $AppDir\ScanAV.exe"
+      return
     }
+    $lnk.TargetPath = $launcher
+    $lnk.Arguments  = ''
     $lnk.WorkingDirectory = $AppDir
     $lnk.Description       = 'Open the scan-av app'
-    $lnk.IconLocation     = $(if ($launcher -and (Test-Path $launcher)) { "$launcher,0" } elseif ($icon -and (Test-Path $icon.ico)) { "$($icon.ico),0" } else { 'imageres.dll,79' })
+    $lnk.IconLocation     = "$launcher,0"
     $lnk.Save()
     if ($Elevated) {
       # set the "Run as administrator" bit (byte 0x15, flag 0x20) in the .lnk
@@ -563,6 +588,7 @@ function New-DesktopShortcut {
       [IO.File]::WriteAllBytes($lnkPath, $b)
     }
     Ok "Desktop shortcut created: $lnkPath"
+    Info "Shortcut target: $launcher"
     if ($Elevated) { Info 'It runs elevated -> one UAC prompt at launch, no per-scan Emsisoft prompts.' }
   } catch { Warn "Could not create desktop shortcut: $_" }
 }
