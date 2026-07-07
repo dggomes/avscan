@@ -30,7 +30,7 @@ Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' 
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.0')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.1')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -40,14 +40,14 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnEdit','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress') {
+  foreach ($need in 'BtnAddTop','BtnEdit','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel') {
     Assert ($names -contains $need) "XAML control $need present"
   }
   Assert ($names -notcontains 'BtnTray') 'XAML control BtnTray removed'
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -75,16 +75,25 @@ $invokeAddFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Lan
 $addSimpleFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-AddScanFolderSimpleDialog' -or $n.Name -eq 'script:Show-AddScanFolderSimpleDialog') }, $true) | Select-Object -First 1
 $addWinFormsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-AddScanFolderWinFormsDialog' -or $n.Name -eq 'script:Show-AddScanFolderWinFormsDialog') }, $true) | Select-Object -First 1
 $safePickerFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-SafeFolderPicker' -or $n.Name -eq 'script:Show-SafeFolderPicker') }, $true) | Select-Object -First 1
-Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-AddScanFolderSimpleDialog' -and $invokeAddFn.Extent.Text -notmatch 'Show-AddScanFolderWinFormsDialog') `
-  'add folder click path bypasses advanced WinForms picker'
+$inlineRootFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Get-AddScanFolderRoots' -or $n.Name -eq 'script:Get-AddScanFolderRoots') }, $true) | Select-Object -First 1
+$inlineShowFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-InlineAddFolderPanel' -or $n.Name -eq 'script:Show-InlineAddFolderPanel') }, $true) | Select-Object -First 1
+$inlineLoadFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Load-InlineAddFolder' -or $n.Name -eq 'script:Load-InlineAddFolder') }, $true) | Select-Object -First 1
+Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-InlineAddFolderPanel' -and $invokeAddFn.Extent.Text -notmatch 'Show-AddScanFolderWinFormsDialog') `
+  'add folder wrapper prefers inline browser and bypasses advanced WinForms picker'
+Assert ($inlineRootFn -and $inlineRootFn.Extent.Text -match 'DriveInfo' -and $inlineRootFn.Extent.Text -match 'Get-KnownNetworkFolders' -and $inlineRootFn.Extent.Text -match 'scanFolders') `
+  'inline add folder roots include drives, mapped/network locations and existing scan folders'
+Assert ($inlineShowFn -and $inlineShowFn.Extent.Text -match 'Refresh-InlineAddFolderRoots' -and $inlineShowFn.Extent.Text -match 'AddScanFolderFallbackDialog' -and $inlineShowFn.Extent.Text -notmatch 'XamlReader') `
+  'inline add folder panel opens inside main window without loading a secondary dialog'
+Assert ($inlineLoadFn -and $inlineLoadFn.Extent.Text -match 'Get-ChildItem' -and $inlineLoadFn.Extent.Text -match 'UNC path') `
+  'inline add folder browser lists subfolders and explains UNC fallback'
 Assert ($addSimpleFn -and $addSimpleFn.Extent.Text -match 'XamlReader' -and $addSimpleFn.Extent.Text -match 'FindName' -and $addSimpleFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addSimpleFn.Extent.Text -match 'mapped/network' -and $addSimpleFn.Extent.Text -match 'TextBox' -and $addSimpleFn.Extent.Text -match 'ComboBox' -and $addSimpleFn.Extent.Text -match 'ListBox' -and $addSimpleFn.Extent.Text -match 'Open Path' -and $addSimpleFn.Extent.Text -match 'Add All Mapped' -and $addSimpleFn.Extent.Text -match 'NoNamePrompt' -and $addSimpleFn.Extent.Text -notmatch 'InputBox' -and $addSimpleFn.Extent.Text -notmatch 'YesNoCancel') `
   'simple add folder dialog loads WPF browser from XAML and avoids overloaded prompts'
 Assert ($addWinFormsFn -and $addWinFormsFn.Extent.Text -match 'Add-Type -AssemblyName System.Windows.Forms' -and $addWinFormsFn.Extent.Text -match 'Add All Mapped' -and $addWinFormsFn.Extent.Text -match 'CheckedListBox' -and $addWinFormsFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addWinFormsFn.Extent.Text -match 'Show-SafeFolderPicker') `
   'add folder WinForms dialog can add all mapped network locations and uses safe in-app folder browsing'
 Assert ($safePickerFn -and $safePickerFn.Extent.Text -match 'DriveInfo' -and $safePickerFn.Extent.Text -match 'Get-KnownNetworkFolders' -and $safePickerFn.Extent.Text -match 'Use This Folder' -and $src -notmatch 'FolderBrowserDialog') `
   'folder picking avoids native FolderBrowserDialog crash path'
-Assert ($src -match "TileAdd'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}" -and $src -match "BtnAddTop'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}") `
-  'add folder buttons use guarded wrapper'
+Assert ($src -match "TileAdd'\\)\\.Add_Click\\(\\{ Show-InlineAddFolderPanel \\}" -and $src -match "BtnAddTop'\\)\\.Add_Click\\(\\{ Show-InlineAddFolderPanel \\}") `
+  'add folder buttons open the inline browser directly'
 
 # ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {
