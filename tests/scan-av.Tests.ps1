@@ -36,13 +36,14 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnEdit','BtnTray','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress') {
+  foreach ($need in 'BtnAddTop','BtnEdit','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress') {
     Assert ($names -contains $need) "XAML control $need present"
   }
+  Assert ($names -notcontains 'BtnTray') 'XAML control BtnTray removed'
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -52,6 +53,14 @@ Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Show-CleanNextSte
   'clean scan results use modal next-step dialog'
 Assert ($cleanDialogFn -and $cleanDialogFn.Extent.Text -match 'All clean' -and $cleanDialogFn.Extent.Text -match 'Rename \+ Move Folder' -and $cleanDialogFn.Extent.Text -match 'Run EXE' -and $cleanDialogFn.Extent.Text -match 'compatibility settings') `
   'clean next-step modal exposes close, move, run exe actions'
+$exitChoiceFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-ExitChoiceDialog' -or $n.Name -eq 'script:Show-ExitChoiceDialog') }, $true) | Select-Object -First 1
+Assert ($exitChoiceFn -and $exitChoiceFn.Extent.Text -match 'minimize to tray' -and $exitChoiceFn.Extent.Text -match 'quit') `
+  'exit button asks between tray and quit'
+$restartFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Restart-AppViaLauncher' -or $n.Name -eq 'script:Restart-AppViaLauncher') }, $true) | Select-Object -First 1
+Assert ($restartFn -and $restartFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $restartFn.Extent.Text -match 'ScanAV\.exe') `
+  'app update restart uses ScanAV.exe launcher'
+Assert ($src -notmatch "Start-Process -FilePath 'powershell\.exe'.*-Gui") `
+  'app update restart does not relaunch through powershell.exe'
 
 # ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {

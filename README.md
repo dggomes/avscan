@@ -74,7 +74,7 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
 - Clean scan results show a next-step modal: close, choose a folder to rename/move into another configured scan folder, or choose an `.exe` to run. The run action can apply Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
-- Header controls can hide the app to the tray or exit it explicitly; the tray menu can reopen or exit the app.
+- Header controls include **Update** and **Exit**; Exit asks whether to minimize to tray or quit. The tray menu can reopen or exit the app.
 
 The installer also creates `%LOCALAPPDATA%\ScanAV\ScanAV.exe`, a small standalone
 launcher for the desktop app. If you use a launcher such as ROG Armoury, point it

@@ -1995,6 +1995,27 @@ function script:Add-ScanFolderDialog {
       $script:win.Close()
     } catch {}
   }
+  function script:Show-ExitChoiceDialog {
+    try {
+      $choice = [System.Windows.MessageBox]::Show("What do you want to do?`n`nYes = minimize to tray`nNo = quit`nCancel = stay open",'scan-av','YesNoCancel','Question')
+      if ($choice -eq 'Yes') { Hide-ToTray }
+      elseif ($choice -eq 'No') { Exit-App }
+    } catch {}
+  }
+  function script:Restart-AppViaLauncher {
+    try {
+      $launcher = Ensure-StandaloneLauncher -Quiet
+      if (-not ($launcher -and (Test-Path $launcher))) {
+        [System.Windows.MessageBox]::Show("The app was updated, but ScanAV.exe could not be created.`n`nExpected path:`n$AppDir\ScanAV.exe`n`nThe app was not restarted through PowerShell.",'scan-av') | Out-Null
+        return $false
+      }
+      Start-Process -FilePath $launcher -WorkingDirectory $AppDir
+      return $true
+    } catch {
+      [System.Windows.MessageBox]::Show("Could not restart ScanAV.exe:`n$_",'scan-av') | Out-Null
+      return $false
+    }
+  }
   # One-shot balloon notification via the tray (reliable for unpackaged apps, unlike
   # WinRT toasts which need a Start-menu shortcut with a registered AppUserModelID).
   function script:Show-TrayToast([string]$title, [string]$msg, [bool]$bad = $false) {
@@ -2418,9 +2439,8 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
           <Button x:Name="BtnSettings" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Settings" FontSize="15"/></StackPanel></Button>
-          <Button x:Name="BtnTray" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Tray" FontSize="15"/></StackPanel></Button>
           <Button x:Name="BtnExit" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Exit" FontSize="15"/></StackPanel></Button>
-          <Button x:Name="BtnMore" Style="{StaticResource Soft}"><TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="16"/></Button>
+          <Button x:Name="BtnUpdate" Style="{StaticResource Soft}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Update" FontSize="15"/></StackPanel></Button>
         </StackPanel>
       </Grid>
 
@@ -2738,7 +2758,7 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
     $r = Update-FromGitHub
     if ($r.ok) {
       $a = [System.Windows.MessageBox]::Show("$($r.msg)`n`nRestart the app now?",'scan-av','YesNo','Question')
-      if ($a -eq 'Yes') { Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File', ('"{0}"' -f $ps1), '-Gui'); $win.Close() }
+      if ($a -eq 'Yes') { if (Restart-AppViaLauncher) { $win.Close() } }
     } else { [System.Windows.MessageBox]::Show($r.msg,'scan-av') | Out-Null }
   }
   $showScanPage = {
@@ -2778,9 +2798,8 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
   (& $find 'NavSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
   (& $find 'NavAbout').Add_Click({ Show-Page 'About' })
   (& $find 'BtnSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
-  (& $find 'BtnTray').Add_Click({ Hide-ToTray })
-  (& $find 'BtnExit').Add_Click({ Exit-App })
-  (& $find 'BtnMore').Add_Click($doUpdateApp)
+  (& $find 'BtnExit').Add_Click({ Show-ExitChoiceDialog })
+  (& $find 'BtnUpdate').Add_Click($doUpdateApp)
   (& $find 'BtnSaveSettings').Add_Click($saveSettings)
   (& $find 'BtnReloadSettings').Add_Click($loadSettings)
   (& $find 'RepoLink').Add_RequestNavigate({ param($s,$e) try { Start-Process $e.Uri.AbsoluteUri } catch {}; $e.Handled = $true })
