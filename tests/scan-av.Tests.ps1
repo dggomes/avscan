@@ -30,7 +30,7 @@ Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' 
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.7')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.8')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -77,8 +77,8 @@ $addWinFormsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.L
 $safePickerFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-SafeFolderPicker' -or $n.Name -eq 'script:Show-SafeFolderPicker') }, $true) | Select-Object -First 1
 Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-AddScanFolderSimpleDialog' -and $invokeAddFn.Extent.Text -notmatch 'Show-AddScanFolderWinFormsDialog') `
   'add folder click path bypasses advanced WinForms picker'
-Assert ($addSimpleFn -and $addSimpleFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addSimpleFn.Extent.Text -match 'mapped/network' -and $addSimpleFn.Extent.Text -match 'InputBox' -and $addSimpleFn.Extent.Text -match 'ALL' -and $addSimpleFn.Extent.Text -notmatch 'YesNoCancel') `
-  'simple add folder dialog supports add-all mapped locations and pasted paths without overloaded choice prompt'
+Assert ($addSimpleFn -and $addSimpleFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addSimpleFn.Extent.Text -match 'mapped/network' -and $addSimpleFn.Extent.Text -match 'TextBox' -and $addSimpleFn.Extent.Text -match 'ComboBox' -and $addSimpleFn.Extent.Text -match 'Add All Mapped' -and $addSimpleFn.Extent.Text -match 'NoNamePrompt' -and $addSimpleFn.Extent.Text -notmatch 'InputBox' -and $addSimpleFn.Extent.Text -notmatch 'YesNoCancel') `
+  'simple add folder dialog uses WPF controls and avoids overloaded prompts'
 Assert ($addWinFormsFn -and $addWinFormsFn.Extent.Text -match 'Add-Type -AssemblyName System.Windows.Forms' -and $addWinFormsFn.Extent.Text -match 'Add All Mapped' -and $addWinFormsFn.Extent.Text -match 'CheckedListBox' -and $addWinFormsFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addWinFormsFn.Extent.Text -match 'Show-SafeFolderPicker') `
   'add folder WinForms dialog can add all mapped network locations and uses safe in-app folder browsing'
 Assert ($safePickerFn -and $safePickerFn.Extent.Text -match 'DriveInfo' -and $safePickerFn.Extent.Text -match 'Get-KnownNetworkFolders' -and $safePickerFn.Extent.Text -match 'Use This Folder' -and $src -notmatch 'FolderBrowserDialog') `
