@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   scan-av - on-demand multi-engine antivirus scanner for Windows.
   Runs ClamAV (clamscan) and/or Emsisoft Emergency Kit (a2cmd) over folders,
@@ -1882,6 +1882,7 @@ function script:Show-AddScanFolderSimpleDialog {
     Add-Type -AssemblyName PresentationCore
     Add-Type -AssemblyName WindowsBase
     try { $known = @(Get-KnownNetworkFolders) } catch { $known = @() }
+
     $roots = New-Object System.Collections.Generic.List[object]
     $seenRoots = @{}
     function local:AddRoot([string]$path, [string]$label = '') {
@@ -1908,73 +1909,72 @@ function script:Show-AddScanFolderSimpleDialog {
       }
     } catch {}
 
-    $dlg = New-Object System.Windows.Window
-    $dlg.Title = 'Add scan folder'
-    $dlg.Width = 760; $dlg.Height = 640; $dlg.ResizeMode = [System.Windows.ResizeMode]::CanResize
-    $dlg.WindowStartupLocation = 'CenterOwner'
+    $dialogXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add scan folder" Width="760" Height="640" MinWidth="620" MinHeight="460"
+        ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
+        Background="#070910" Foreground="#FFFFFF" FontFamily="Segoe UI">
+  <Grid Margin="22">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0">
+      <TextBlock Text="Add scan folder" FontSize="21" FontWeight="SemiBold" Margin="0,0,0,8"/>
+      <TextBlock Text="Choose a folder below, select a mapped/network location, or paste a path such as \\server\share."
+                 FontSize="13" Foreground="#8A93A6" TextWrapping="Wrap" Margin="0,0,0,12"/>
+    </StackPanel>
+    <TextBox x:Name="PathBox" Grid.Row="1" MinHeight="34" Padding="8,5,8,5"
+             Background="#11151F" Foreground="#FFFFFF" BorderBrush="#222A38"/>
+    <StackPanel Grid.Row="2" Margin="0,10,0,10">
+      <ComboBox x:Name="RootCombo" MinHeight="32" Margin="0,0,0,10"/>
+      <StackPanel Orientation="Horizontal">
+        <Button x:Name="OpenPath" Content="Open Path" MinWidth="96" Margin="0,0,8,0"/>
+        <Button x:Name="UpButton" Content="Up" MinWidth="70" Margin="0,0,8,0"/>
+        <Button x:Name="RefreshButton" Content="Refresh" MinWidth="86"/>
+      </StackPanel>
+    </StackPanel>
+    <ListBox x:Name="FolderList" Grid.Row="3" MinHeight="260"
+             Background="#11151F" Foreground="#FFFFFF" BorderBrush="#222A38"/>
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="CancelButton" Content="Cancel" MinWidth="90" Margin="0,0,8,0"/>
+      <Button x:Name="AddAllButton" Content="Add All Mapped" MinWidth="124" Margin="0,0,8,0"/>
+      <Button x:Name="AddButton" Content="Add Folder" MinWidth="104"/>
+    </StackPanel>
+  </Grid>
+</Window>
+'@
+    $reader = New-Object System.Xml.XmlNodeReader ([xml]$dialogXaml)
+    $dlg = [Windows.Markup.XamlReader]::Load($reader)
     if ($script:win) { $dlg.Owner = $script:win }
-    $dlg.Background = (WBrush '#070910'); $dlg.Foreground = (WBrush '#FFFFFF')
-    $dlg.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
 
-    $panel = New-Object System.Windows.Controls.DockPanel
-    $panel.Margin = New-Object System.Windows.Thickness 22
-    $panel.LastChildFill = $true
+    $pathBox = $dlg.FindName('PathBox')
+    $rootCombo = $dlg.FindName('RootCombo')
+    $folderList = $dlg.FindName('FolderList')
+    $openPath = $dlg.FindName('OpenPath')
+    $upButton = $dlg.FindName('UpButton')
+    $refreshButton = $dlg.FindName('RefreshButton')
+    $cancelButton = $dlg.FindName('CancelButton')
+    $addAllButton = $dlg.FindName('AddAllButton')
+    $addButton = $dlg.FindName('AddButton')
 
-    $top = New-Object System.Windows.Controls.StackPanel
-    [System.Windows.Controls.DockPanel]::SetDock($top, [System.Windows.Controls.Dock]::Top)
-    [void]$panel.Children.Add($top)
-
-    $title = New-Object System.Windows.Controls.TextBlock
-    $title.Text = 'Add scan folder'; $title.FontSize = 21; $title.FontWeight = 'SemiBold'; $title.Margin = New-Object System.Windows.Thickness 0,0,0,8
-    [void]$top.Children.Add($title)
-    $help = New-Object System.Windows.Controls.TextBlock
-    $help.Text = 'Choose a folder below, select a mapped/network location, or paste a path such as \\server\share.'
-    $help.FontSize = 13; $help.Foreground = (WBrush '#8A93A6'); $help.TextWrapping = 'Wrap'; $help.Margin = New-Object System.Windows.Thickness 0,0,0,12
-    [void]$top.Children.Add($help)
-
-    $pathBox = New-Object System.Windows.Controls.TextBox
-    $pathBox.MinHeight = 34; $pathBox.Padding = New-Object System.Windows.Thickness 8,5,8,5
-    $pathBox.Background = (WBrush '#11151F'); $pathBox.Foreground = (WBrush '#FFFFFF'); $pathBox.BorderBrush = (WBrush '#222A38')
-    [void]$top.Children.Add($pathBox)
-
-    $combo = New-Object System.Windows.Controls.ComboBox
-    $combo.MinHeight = 32; $combo.Margin = New-Object System.Windows.Thickness 0,10,0,10
+    $rootMap = @{}
     foreach ($r in @($roots)) {
-      $item = New-Object System.Windows.Controls.ComboBoxItem
-      $item.Content = [string]$r.Label
-      $item.Tag = [string]$r.Path
-      [void]$combo.Items.Add($item)
+      $label = "{0}    {1}" -f ([string]$r.Label), ([string]$r.Path)
+      $rootMap[$label] = [string]$r.Path
+      [void]$rootCombo.Items.Add($label)
     }
     if (-not $roots.Count) {
-      $combo.IsEnabled = $false
-      $item = New-Object System.Windows.Controls.ComboBoxItem
-      $item.Content = 'No folders discovered'
-      [void]$combo.Items.Add($item)
-      $combo.SelectedIndex = 0
+      [void]$rootCombo.Items.Add('No folders discovered')
+      $rootCombo.IsEnabled = $false
     }
-    [void]$top.Children.Add($combo)
+    $addAllButton.IsEnabled = ($known.Count -gt 0)
 
-    $nav = New-Object System.Windows.Controls.StackPanel
-    $nav.Orientation = 'Horizontal'; $nav.Margin = New-Object System.Windows.Thickness 0,0,0,10
-    $open = New-Object System.Windows.Controls.Button; $open.Content = 'Open Path'; $open.MinWidth = 96; $open.Margin = New-Object System.Windows.Thickness 0,0,8,0
-    $up = New-Object System.Windows.Controls.Button; $up.Content = 'Up'; $up.MinWidth = 70; $up.Margin = New-Object System.Windows.Thickness 0,0,8,0
-    $refresh = New-Object System.Windows.Controls.Button; $refresh.Content = 'Refresh'; $refresh.MinWidth = 86
-    try { if ($script:win) { $open.Style = $script:win.FindResource('Soft'); $up.Style = $script:win.FindResource('Soft'); $refresh.Style = $script:win.FindResource('Soft') } } catch {}
-    [void]$nav.Children.Add($open); [void]$nav.Children.Add($up); [void]$nav.Children.Add($refresh)
-    [void]$top.Children.Add($nav)
-
-    $list = New-Object System.Windows.Controls.ListBox
-    $list.MinHeight = 260
-    $list.Background = (WBrush '#11151F'); $list.Foreground = (WBrush '#FFFFFF'); $list.BorderBrush = (WBrush '#222A38')
-
-    $buttons = New-Object System.Windows.Controls.StackPanel
-    $buttons.Orientation = 'Horizontal'; $buttons.HorizontalAlignment = 'Right'; $buttons.Margin = New-Object System.Windows.Thickness 0,12,0,0
-    [System.Windows.Controls.DockPanel]::SetDock($buttons, [System.Windows.Controls.Dock]::Bottom)
-    $cancel = New-Object System.Windows.Controls.Button; $cancel.Content = 'Cancel'; $cancel.MinWidth = 90; $cancel.Margin = New-Object System.Windows.Thickness 0,0,8,0
-    $addAll = New-Object System.Windows.Controls.Button; $addAll.Content = 'Add All Mapped'; $addAll.MinWidth = 124; $addAll.Margin = New-Object System.Windows.Thickness 0,0,8,0; $addAll.IsEnabled = ($known.Count -gt 0)
-    $add = New-Object System.Windows.Controls.Button; $add.Content = 'Add Folder'; $add.MinWidth = 104
-    try { if ($script:win) { $cancel.Style = $script:win.FindResource('Soft'); $addAll.Style = $script:win.FindResource('Soft'); $add.Style = $script:win.FindResource('Primary') } } catch {}
-    $state = @{ Current = '' }
+    $state = @{ Current = ''; ItemMap = @{} }
     function local:LoadFolder([string]$path) {
       $p = Normalize-ScanFolderPath $path
       if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Container)) {
@@ -1983,55 +1983,58 @@ function script:Show-AddScanFolderSimpleDialog {
       }
       $state.Current = $p
       $pathBox.Text = $p
-      $list.Items.Clear()
+      $folderList.Items.Clear()
+      $state.ItemMap = @{}
       try {
         $dirs = @(Get-ChildItem -LiteralPath $p -Directory -Force -ErrorAction Stop | Sort-Object Name)
         foreach ($d in $dirs) {
-          $item = New-Object System.Windows.Controls.ListBoxItem
-          $item.Content = $d.Name
-          $item.Tag = $d.FullName
-          [void]$list.Items.Add($item)
+          $label = "{0}    {1}" -f $d.Name, $d.FullName
+          $state.ItemMap[$label] = $d.FullName
+          [void]$folderList.Items.Add($label)
         }
-        if (-not $dirs.Count) {
-          $item = New-Object System.Windows.Controls.ListBoxItem
-          $item.Content = '(no subfolders)'
-          $item.IsEnabled = $false
-          [void]$list.Items.Add($item)
-        }
+        if (-not $dirs.Count) { [void]$folderList.Items.Add('(no subfolders)') }
       } catch {
-        $item = New-Object System.Windows.Controls.ListBoxItem
-        $item.Content = '(cannot list subfolders)'
-        $item.IsEnabled = $false
-        [void]$list.Items.Add($item)
+        [void]$folderList.Items.Add('(cannot list subfolders)')
       }
     }
-    $combo.Add_SelectionChanged({ try { if ($combo.SelectedItem -and $combo.SelectedItem.Tag) { LoadFolder ([string]$combo.SelectedItem.Tag) } } catch {} })
-    $open.Add_Click({ LoadFolder ([string]$pathBox.Text) })
-    $refresh.Add_Click({ LoadFolder ([string]$pathBox.Text) })
-    $up.Add_Click({
+
+    $rootCombo.Add_SelectionChanged({
+      try {
+        $key = [string]$rootCombo.SelectedItem
+        if ($rootMap.ContainsKey($key)) { LoadFolder $rootMap[$key] }
+      } catch {}
+    })
+    $folderList.Add_SelectionChanged({
+      try {
+        $key = [string]$folderList.SelectedItem
+        if ($state.ItemMap.ContainsKey($key)) { $pathBox.Text = [string]$state.ItemMap[$key] }
+      } catch {}
+    })
+    $folderList.Add_MouseDoubleClick({
+      try {
+        $key = [string]$folderList.SelectedItem
+        if ($state.ItemMap.ContainsKey($key)) { LoadFolder $state.ItemMap[$key] }
+      } catch {}
+    })
+    $openPath.Add_Click({ LoadFolder ([string]$pathBox.Text) })
+    $refreshButton.Add_Click({ LoadFolder ([string]$pathBox.Text) })
+    $upButton.Add_Click({
       try {
         $parent = Split-Path ([string]$state.Current) -Parent
         if ($parent) { LoadFolder $parent }
       } catch {}
     })
-    $list.Add_SelectionChanged({ try { if ($list.SelectedItem -and $list.SelectedItem.Tag) { $pathBox.Text = [string]$list.SelectedItem.Tag } } catch {} })
-    $list.Add_MouseDoubleClick({ try { if ($list.SelectedItem -and $list.SelectedItem.Tag) { LoadFolder ([string]$list.SelectedItem.Tag) } } catch {} })
-    $cancel.Add_Click({ try { $dlg.DialogResult = $false; $dlg.Close() } catch { $dlg.Close() } })
-    $addAll.Add_Click({
+    $cancelButton.Add_Click({ try { $dlg.DialogResult = $false; $dlg.Close() } catch { $dlg.Close() } })
+    $addAllButton.Add_Click({
       Add-ScanFolderPaths @($known | ForEach-Object { [string]$_.Path })
       try { $dlg.DialogResult = $true; $dlg.Close() } catch { $dlg.Close() }
     })
-    $add.Add_Click({
-      $path = [string]$pathBox.Text
-      if (Add-ScanFolderPath $path -NoNamePrompt) {
+    $addButton.Add_Click({
+      if (Add-ScanFolderPath ([string]$pathBox.Text) -NoNamePrompt) {
         try { $dlg.DialogResult = $true; $dlg.Close() } catch { $dlg.Close() }
       }
     })
-    [void]$buttons.Children.Add($cancel); [void]$buttons.Children.Add($addAll); [void]$buttons.Children.Add($add)
-    [void]$panel.Children.Add($buttons)
-    [void]$panel.Children.Add($list)
-    $dlg.Content = $panel
-    if ($combo.Items.Count -gt 0 -and $combo.IsEnabled) { $combo.SelectedIndex = 0 }
+    if ($rootCombo.Items.Count -gt 0 -and $rootCombo.IsEnabled) { $rootCombo.SelectedIndex = 0 }
     [void]$dlg.ShowDialog()
   } catch {
     [System.Windows.MessageBox]::Show("Could not open Add Folder:`n$($_.Exception.Message)",'scan-av') | Out-Null
