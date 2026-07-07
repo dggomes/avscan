@@ -36,7 +36,7 @@ Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' 
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.3')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.4')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -53,7 +53,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('New-UpdaterShortcut','Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
+foreach ($fnName in @('New-UpdaterShortcut','Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Select-InlineAddFolderPath','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -84,6 +84,7 @@ $safePickerFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.La
 $inlineRootFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Get-AddScanFolderRoots' -or $n.Name -eq 'script:Get-AddScanFolderRoots') }, $true) | Select-Object -First 1
 $inlineShowFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-InlineAddFolderPanel' -or $n.Name -eq 'script:Show-InlineAddFolderPanel') }, $true) | Select-Object -First 1
 $inlineLoadFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Load-InlineAddFolder' -or $n.Name -eq 'script:Load-InlineAddFolder') }, $true) | Select-Object -First 1
+$inlineSelectFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Select-InlineAddFolderPath' -or $n.Name -eq 'script:Select-InlineAddFolderPath') }, $true) | Select-Object -First 1
 Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-InlineAddFolderPanel' -and $invokeAddFn.Extent.Text -notmatch 'Show-AddScanFolderWinFormsDialog') `
   'add folder wrapper prefers inline browser and bypasses advanced WinForms picker'
 Assert ($inlineRootFn -and $inlineRootFn.Extent.Text -match 'DriveInfo' -and $inlineRootFn.Extent.Text -match 'Get-KnownNetworkFolders' -and $inlineRootFn.Extent.Text -match 'scanFolders') `
@@ -92,6 +93,8 @@ Assert ($inlineShowFn -and $inlineShowFn.Extent.Text -match 'Refresh-InlineAddFo
   'inline add folder panel opens inside main window without loading a secondary dialog'
 Assert ($inlineLoadFn -and $inlineLoadFn.Extent.Text -match 'Get-ChildItem' -and $inlineLoadFn.Extent.Text -match 'UNC path') `
   'inline add folder browser lists subfolders and explains UNC fallback'
+Assert ($inlineSelectFn -and $inlineSelectFn.Extent.Text -match 'SelectedItem' -and $src -match 'Content="Select"' -and $src -match "AddFolderOpen.*Add_Click\\(\\{ Select-InlineAddFolderPath \\}" -and $src -notmatch "AddFolderOpen.*Add_Click\\(\\{ Load-InlineAddFolder") `
+  'inline add folder Select button chooses highlighted folder instead of navigating into it'
 Assert ($addSimpleFn -and $addSimpleFn.Extent.Text -match 'XamlReader' -and $addSimpleFn.Extent.Text -match 'FindName' -and $addSimpleFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addSimpleFn.Extent.Text -match 'mapped/network' -and $addSimpleFn.Extent.Text -match 'TextBox' -and $addSimpleFn.Extent.Text -match 'ComboBox' -and $addSimpleFn.Extent.Text -match 'ListBox' -and $addSimpleFn.Extent.Text -match 'Open Path' -and $addSimpleFn.Extent.Text -match 'Add All Mapped' -and $addSimpleFn.Extent.Text -match 'NoNamePrompt' -and $addSimpleFn.Extent.Text -notmatch 'InputBox' -and $addSimpleFn.Extent.Text -notmatch 'YesNoCancel') `
   'simple add folder dialog loads WPF browser from XAML and avoids overloaded prompts'
 Assert ($addWinFormsFn -and $addWinFormsFn.Extent.Text -match 'Add-Type -AssemblyName System.Windows.Forms' -and $addWinFormsFn.Extent.Text -match 'Add All Mapped' -and $addWinFormsFn.Extent.Text -match 'CheckedListBox' -and $addWinFormsFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addWinFormsFn.Extent.Text -match 'Show-SafeFolderPicker') `
