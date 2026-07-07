@@ -2110,7 +2110,7 @@ function script:Show-RunResults($res) {
         })
         [void]$btns.Children.Add($pick)
 
-        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose File (DPI)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
+        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose File (Compatibility)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
         $pickDpi.Add_Click({
           param($s,$e)
           $tag = $s.Tag
@@ -2123,7 +2123,7 @@ function script:Show-RunResults($res) {
         $run.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
         [void]$btns.Children.Add($run)
 
-        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run File (DPI)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $true }
+        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run File (Compatibility)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.runnablePath; Dpi = $true }
         $runDpi.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanExecutable ([string]$tag.Path) ([bool]$tag.Dpi) })
         [void]$btns.Children.Add($runDpi)
       }

@@ -47,7 +47,7 @@ foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog',
   Assert ($null -ne $f) "function $fnName found"
 }
 $showResultsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-RunResults' -or $n.Name -eq 'script:Show-RunResults') }, $true) | Select-Object -First 1
-Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose File' -and $showResultsFn.Extent.Text -match 'DPI') `
+Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose File' -and $showResultsFn.Extent.Text -match 'Compatibility') `
   'clean scan results expose next-step actions'
 
 # ---- 4. extract pure functions from the AST ----
