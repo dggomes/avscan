@@ -30,7 +30,7 @@ Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' 
 $src = Get-Content $srcPath -Raw
 $verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
 $buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.4')) 'app version bumped for updater visibility'
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.9.5')) 'app version bumped for updater visibility'
 Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
@@ -47,7 +47,7 @@ try {
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
@@ -73,10 +73,13 @@ Assert ($knownNetworkFn -and $knownNetworkFn.Extent.Text -match "HKCU:\\Network"
   'known network folders include mapped drives from Windows drive APIs and Explorer network shortcuts'
 $invokeAddFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Invoke-AddScanFolderDialog' -or $n.Name -eq 'script:Invoke-AddScanFolderDialog') }, $true) | Select-Object -First 1
 $addWinFormsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-AddScanFolderWinFormsDialog' -or $n.Name -eq 'script:Show-AddScanFolderWinFormsDialog') }, $true) | Select-Object -First 1
+$safePickerFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-SafeFolderPicker' -or $n.Name -eq 'script:Show-SafeFolderPicker') }, $true) | Select-Object -First 1
 Assert ($invokeAddFn -and $invokeAddFn.Extent.Text -match 'Show-AddScanFolderWinFormsDialog' -and $invokeAddFn.Extent.Text -match 'Show-AddScanFolderFallbackDialog') `
   'add folder click path uses WinForms dialog with fallback'
-Assert ($addWinFormsFn -and $addWinFormsFn.Extent.Text -match 'Add-Type -AssemblyName System.Windows.Forms' -and $addWinFormsFn.Extent.Text -match 'Add All Mapped' -and $addWinFormsFn.Extent.Text -match 'CheckedListBox' -and $addWinFormsFn.Extent.Text -match 'Add-ScanFolderPaths') `
-  'add folder WinForms dialog can add all mapped network locations'
+Assert ($addWinFormsFn -and $addWinFormsFn.Extent.Text -match 'Add-Type -AssemblyName System.Windows.Forms' -and $addWinFormsFn.Extent.Text -match 'Add All Mapped' -and $addWinFormsFn.Extent.Text -match 'CheckedListBox' -and $addWinFormsFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addWinFormsFn.Extent.Text -match 'Show-SafeFolderPicker') `
+  'add folder WinForms dialog can add all mapped network locations and uses safe in-app folder browsing'
+Assert ($safePickerFn -and $safePickerFn.Extent.Text -match 'DriveInfo' -and $safePickerFn.Extent.Text -match 'Get-KnownNetworkFolders' -and $safePickerFn.Extent.Text -match 'Use This Folder' -and $src -notmatch 'FolderBrowserDialog') `
+  'folder picking avoids native FolderBrowserDialog crash path'
 Assert ($src -match "TileAdd'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}" -and $src -match "BtnAddTop'\\)\\.Add_Click\\(\\{ Invoke-AddScanFolderDialog \\}") `
   'add folder buttons use guarded wrapper'
 
