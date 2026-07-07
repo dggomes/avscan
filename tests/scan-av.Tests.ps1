@@ -17,6 +17,17 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($srcPath, [ref]
 Assert (-not $errs -or $errs.Count -eq 0) 'scan-av.ps1 parses' ("$($errs | ForEach-Object { $_.Message })")
 if ($errs -and $errs.Count) { exit 1 }
 
+# ---- 1b. standalone launcher wiring for ROG Armoury / app launchers ----
+$launcherFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-StandaloneLauncher' }, $true) | Select-Object -First 1
+$shortcutFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-DesktopShortcut' }, $true) | Select-Object -First 1
+$updateFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-FromGitHub' }, $true) | Select-Object -First 1
+Assert ($launcherFn -and $launcherFn.Extent.Text -match 'ScanAV\.exe' -and $launcherFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
+  'standalone launcher function builds ScanAV.exe wrapper'
+Assert ($shortcutFn -and $shortcutFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $shortcutFn.Extent.Text -match 'WindowsPowerShell\\v1\.0\\powershell\.exe') `
+  'desktop shortcut prefers ScanAV.exe and keeps PowerShell fallback'
+Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher') `
+  'self-update refreshes standalone launcher'
+
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
 $src = Get-Content $srcPath -Raw
 $m = [regex]::Match($src, '(?s)\$xaml = @"(.*?)\r?\n"@')
@@ -25,19 +36,28 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnEdit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress') {
+  foreach ($need in 'BtnAddTop','BtnEdit','BtnTray','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress') {
     Assert ($names -contains $need) "XAML control $need present"
   }
 } catch { Assert $false 'XAML well-formed' "$_" }
 
-# ---- 3. extract pure functions from the AST ----
+# ---- 3. app workflow functions are present ----
+foreach ($fnName in @('Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredGamesRoot','Choose-InstallerFile','Set-SystemEnhancedDpi','Run-CleanInstaller','Show-MoveFolderDialog','Ensure-TrayIcon','Hide-ToTray','Exit-App')) {
+  $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
+  Assert ($null -ne $f) "function $fnName found"
+}
+$showResultsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-RunResults' -or $n.Name -eq 'script:Show-RunResults') }, $true) | Select-Object -First 1
+Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Clean - choose next step' -and $showResultsFn.Extent.Text -match 'Choose Installer' -and $showResultsFn.Extent.Text -match 'DPI') `
+  'clean scan results expose next-step actions'
+
+# ---- 4. extract pure functions from the AST ----
 foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
   if (-not $f) { Assert $false "function $fnName found"; exit 1 }
   . ([scriptblock]::Create($f.Extent.Text))
 }
 
-# ---- 4. Get-HitPaths: ClamAV / Emsisoft / Defender shapes, deduped ----
+# ---- 5. Get-HitPaths: ClamAV / Emsisoft / Defender shapes, deduped ----
 $tmp = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "avtest_$(Get-Random)") -Force
 $f1 = Join-Path $tmp 'bad one.exe'; Set-Content $f1 'x'
 $f2 = Join-Path $tmp 'evil.dll';    Set-Content $f2 'x'

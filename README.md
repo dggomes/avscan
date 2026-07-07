@@ -69,9 +69,16 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 
 - A protection-status hero and a prominent **Scan Now** action.
 - **Scan Targets** as expandable cards with large checkboxes — pick whole folders or specific sub-folders; give folders custom display names.
+- Folder cards include quick actions to open in Explorer, move/rename into another configured scan folder, or edit the display label.
 - Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder.
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
+- Clean scan results show next-step cards: open the item, move/rename it into the Games folder, choose an installer to run, or launch it with Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
+- Header controls can hide the app to the tray or exit it explicitly; the tray menu can reopen or exit the app.
+
+The installer also creates `%LOCALAPPDATA%\ScanAV\ScanAV.exe`, a small standalone
+launcher for the desktop app. If you use a launcher such as ROG Armoury, point it
+at that EXE instead of the PowerShell script; app updates refresh it automatically.
 
 ```powershell
 scan-av -Gui          # open the app from the command line

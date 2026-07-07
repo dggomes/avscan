@@ -399,6 +399,138 @@ function Ensure-AppIcon {
   } catch { return $null }
 }
 
+# ---------------------------------------------------------------- standalone launcher
+# Builds a tiny Windows EXE wrapper so launchers see ScanAV.exe instead of
+# powershell.exe. The scanner/UI still lives in scan-av.ps1.
+function Ensure-StandaloneLauncher {
+  param([switch]$Quiet, [string]$LauncherVersion = $ScanAvVersion)
+  try { New-Item -ItemType Directory -Force -Path $AppDir | Out-Null } catch {}
+  $ps1 = Join-Path $AppDir 'scan-av.ps1'
+  if (-not (Test-Path $ps1)) {
+    if (-not $Quiet) { Warn "scan-av.ps1 not found in $AppDir - run -Install first." }
+    return $null
+  }
+
+  $launcher = Join-Path $AppDir 'ScanAV.exe'
+  $needsBuild = $true
+  if (Test-Path $launcher) {
+    try {
+      $exe = Get-Item -LiteralPath $launcher -ErrorAction Stop
+      $src = Get-Item -LiteralPath $ps1 -ErrorAction Stop
+      $fv = [Diagnostics.FileVersionInfo]::GetVersionInfo($launcher)
+      $needsBuild = (($fv.ProductVersion -ne $LauncherVersion) -or ($exe.LastWriteTimeUtc -lt $src.LastWriteTimeUtc))
+    } catch { $needsBuild = $true }
+  }
+  if (-not $needsBuild) { return $launcher }
+
+  $icon = Ensure-AppIcon
+  $tmp = Join-Path $env:TEMP ('ScanAV_' + [Guid]::NewGuid().ToString('N') + '.exe')
+  $typeName = 'ScanAVLauncher_' + [Guid]::NewGuid().ToString('N')
+  $versionLiteral = $LauncherVersion -replace '\\','\\' -replace '"','\"'
+  $source = @"
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows.Forms;
+
+[assembly: AssemblyTitle("ScanAV")]
+[assembly: AssemblyDescription("ScanAV standalone launcher")]
+[assembly: AssemblyCompany("dggomes")]
+[assembly: AssemblyProduct("ScanAV")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyInformationalVersion("$versionLiteral")]
+
+public static class $typeName
+{
+    private static string Quote(string value)
+    {
+        if (String.IsNullOrEmpty(value)) return "\"\"";
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    [STAThread]
+    public static int Main(string[] args)
+    {
+        try
+        {
+            string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string ps1 = Path.Combine(appDir, "scan-av.ps1");
+            if (!File.Exists(ps1))
+            {
+                MessageBox.Show("scan-av.ps1 was not found next to ScanAV.exe.", "ScanAV", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 2;
+            }
+
+            string powerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
+            if (!File.Exists(powerShell)) powerShell = "powershell.exe";
+
+            string arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(ps1) + " -Gui";
+            foreach (string arg in args) arguments += " " + Quote(arg);
+
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = powerShell;
+            psi.Arguments = arguments;
+            psi.WorkingDirectory = appDir;
+            psi.UseShellExecute = false;
+            Process child = Process.Start(psi);
+            if (child == null) return 1;
+            child.WaitForExit();
+            return child.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "ScanAV launch failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
+    }
+}
+"@
+  try {
+    $compilerOptions = @()
+    if ($icon -and (Test-Path $icon.ico)) { $compilerOptions += ('/win32icon:"{0}"' -f $icon.ico) }
+    $addTypeArgs = @{
+      TypeDefinition = $source
+      OutputAssembly = $tmp
+      OutputType = 'WindowsApplication'
+      ReferencedAssemblies = @('System.dll','System.Windows.Forms.dll')
+      ErrorAction = 'Stop'
+    }
+    if ($compilerOptions.Count) { $addTypeArgs.CompilerOptions = ($compilerOptions -join ' ') }
+    Add-Type @addTypeArgs
+    try {
+      Move-Item -Path $tmp -Destination $launcher -Force -ErrorAction Stop
+    } catch {
+      $pending = Join-Path $AppDir 'ScanAV.exe.pending'
+      Move-Item -Path $tmp -Destination $pending -Force -ErrorAction Stop
+      $waitPid = $PID
+      try {
+        $thisProc = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+        if ($thisProc.ParentProcessId) {
+          $parentProc = Get-Process -Id ([int]$thisProc.ParentProcessId) -ErrorAction SilentlyContinue
+          if ($parentProc -and $parentProc.ProcessName -ieq 'ScanAV') { $waitPid = [int]$thisProc.ParentProcessId }
+        }
+      } catch {}
+      function local:Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }
+      $replaceCmd = "try { Wait-Process -Id $waitPid -ErrorAction SilentlyContinue } catch {}; Start-Sleep -Milliseconds 500; Move-Item -LiteralPath $(Q $pending) -Destination $(Q $launcher) -Force"
+      $pw = Join-Path $PSHOME 'powershell.exe'
+      Start-Process -FilePath $pw -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-Command',$replaceCmd) -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+      $script:StandaloneLauncherPending = $true
+      if (-not $Quiet) { Warn 'Standalone launcher is currently running; it will be refreshed after ScanAV closes.' }
+      if (Test-Path $launcher) { return $launcher }
+      return $null
+    }
+    $script:StandaloneLauncherPending = $false
+    if (-not $Quiet) { Ok "Standalone launcher installed: $launcher" }
+    return $launcher
+  } catch {
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    if (-not $Quiet) { Warn "Could not build standalone launcher: $_" }
+    return $null
+  }
+}
+
 # ---------------------------------------------------------------- desktop shortcut
 # Plain desktop shortcut that runs scan-av. -Elevated marks it "Run as administrator"
 # so Emsisoft's a2cmd (which self-elevates) doesn't pop a separate UAC/cmd window on
@@ -412,12 +544,18 @@ function New-DesktopShortcut {
     $lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Scan-AV.lnk'
     $ws  = New-Object -ComObject WScript.Shell
     $lnk = $ws.CreateShortcut($lnkPath)
-    $lnk.TargetPath       = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    # launch the GUI app (hidden console host + the window)
-    $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" -Gui"
+    $launcher = Ensure-StandaloneLauncher -Quiet
+    if ($launcher -and (Test-Path $launcher)) {
+      $lnk.TargetPath = $launcher
+      $lnk.Arguments  = ''
+    } else {
+      $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+      # launch the GUI app (hidden console host + the window)
+      $lnk.Arguments  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" -Gui"
+    }
     $lnk.WorkingDirectory = $AppDir
     $lnk.Description       = 'Open the scan-av app'
-    $lnk.IconLocation     = $(if ($icon -and (Test-Path $icon.ico)) { "$($icon.ico),0" } else { 'imageres.dll,79' })
+    $lnk.IconLocation     = $(if ($launcher -and (Test-Path $launcher)) { "$launcher,0" } elseif ($icon -and (Test-Path $icon.ico)) { "$($icon.ico),0" } else { 'imageres.dll,79' })
     $lnk.Save()
     if ($Elevated) {
       # set the "Run as administrator" bit (byte 0x15, flag 0x20) in the .lnk
@@ -546,6 +684,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scan-av.ps1" %*
   if ($env:Path -notlike "*$AppDir*") { $env:Path += ";$AppDir" }
   Info "You can run 'scan-av' here now, and in any newly-opened terminal."
   Ok "Installed to $AppDir"
+  Ensure-StandaloneLauncher | Out-Null
   Write-Host ''
   # desktop shortcut (elevated, so Emsisoft doesn't prompt per scan)
   New-DesktopShortcut -Elevated $true
@@ -1293,9 +1432,12 @@ function Update-FromGitHub {
     if (Test-Path $dst) { Copy-Item $dst "$dst.bak" -Force }
     Copy-Item $tmp $dst -Force
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    $targetVer = if ($newVer) { $newVer } else { $ScanAvVersion }
+    $launcher = Ensure-StandaloneLauncher -Quiet -LauncherVersion $targetVer
     $vtxt = if ($newVer) { "version $newVer" } else { 'the latest version' }
     $note = if ($newVer -and $newVer -eq $ScanAvVersion) { "`n`nNote: this is the same version you're already running. GitHub may still be serving a cached copy - wait a minute and try again." } else { '' }
-    return [pscustomobject]@{ ok = $true; ver = $newVer; msg = "Updated to $vtxt from GitHub (was $ScanAvVersion). Restart to use it.$note" }
+    $launcherNote = if ($script:StandaloneLauncherPending) { "`nStandalone launcher is in use and will be refreshed after ScanAV closes: $launcher" } elseif ($launcher) { "`nStandalone launcher refreshed: $launcher" } else { "`nStandalone launcher could not be refreshed; the PowerShell shortcut fallback still works." }
+    return [pscustomobject]@{ ok = $true; ver = $newVer; msg = "Updated to $vtxt from GitHub (was $ScanAvVersion). Restart to use it.$launcherNote$note" }
   } catch { return [pscustomobject]@{ ok = $false; msg = "Could not replace installed file: $_" } }
 }
 
@@ -1383,10 +1525,29 @@ function script:New-TargetCard($node) {
     $vtb.Child = $vtt
     $vtb.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; $n = $s.Tag; Set-FolderVtAll $n.Path (-not (Get-FolderVtAll $n.Path)); Render-Targets })
     [void]$tr.Children.Add($vtb)
+  }
+  if ($node.IsFolder) {
+    $open = New-Object System.Windows.Controls.TextBlock
+    $open.Text = [string][char]0xE838
+    $open.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+    $open.FontSize = 16; $open.Foreground = (WBrush '#8A93A6'); $open.Margin = New-Object System.Windows.Thickness 0,0,16,0; $open.VerticalAlignment = 'Center'; $open.Cursor = [System.Windows.Input.Cursors]::Hand; $open.Tag = $node
+    $open.ToolTip = 'Open folder'
+    $open.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; Open-FolderNode $s.Tag })
+    [void]$tr.Children.Add($open)
+
+    $move = New-Object System.Windows.Controls.TextBlock
+    $move.Text = [string][char]0xE8DE
+    $move.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+    $move.FontSize = 16; $move.Foreground = (WBrush '#8A93A6'); $move.Margin = New-Object System.Windows.Thickness 0,0,16,0; $move.VerticalAlignment = 'Center'; $move.Cursor = [System.Windows.Input.Cursors]::Hand; $move.Tag = $node
+    $move.ToolTip = 'Move or rename folder'
+    $move.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; Move-FolderNode $s.Tag })
+    [void]$tr.Children.Add($move)
+
     $pen = New-Object System.Windows.Controls.TextBlock
-    $pen.Text = [string][char]0xE70F   # pencil - rename this folder
+    $pen.Text = [string][char]0xE70F   # pencil - display label
     $pen.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
     $pen.FontSize = 16; $pen.Foreground = (WBrush '#8A93A6'); $pen.Margin = New-Object System.Windows.Thickness 0,0,16,0; $pen.VerticalAlignment = 'Center'; $pen.Cursor = [System.Windows.Input.Cursors]::Hand; $pen.Tag = $node
+    $pen.ToolTip = 'Edit display name'
     $pen.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; Rename-FolderNode $s.Tag })
     [void]$tr.Children.Add($pen)
   }
@@ -1568,26 +1729,252 @@ function script:Add-ScanFolderDialog {
   if ($null -ne $nm -and $nm.Trim() -ne '') { Set-FolderName $p ($nm.Trim()) } else { Save-GuiCfg }
   Rebuild-Roots
 }
-function script:Rename-FolderNode($node) {
-  Add-Type -AssemblyName Microsoft.VisualBasic
-  $cur = Get-FolderName $node.Path; if (-not $cur) { $cur = $node.Name }
-  $new = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder:`n{0}" -f $node.Path), 'Folder name', $cur)
-  if ($null -ne $new -and $new.Trim() -ne '') { Set-FolderName $node.Path ($new.Trim()); Render-Targets }
-}
-
-# One-shot balloon notification via the tray (reliable for unpackaged apps, unlike
-# WinRT toasts which need a Start-menu shortcut with a registered AppUserModelID).
-function script:Show-TrayToast([string]$title, [string]$msg, [bool]$bad = $false) {
-  try {
-    if (-not $script:trayIcon) {
-      $script:trayIcon = New-Object System.Windows.Forms.NotifyIcon
-      $icoPath = Join-Path $AppDir 'icon.ico'
-      $script:trayIcon.Icon = $(if (Test-Path $icoPath) { New-Object System.Drawing.Icon($icoPath) } else { [System.Drawing.SystemIcons]::Shield })
+  function script:Rename-FolderNode($node) {
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $cur = Get-FolderName $node.Path; if (-not $cur) { $cur = $node.Name }
+    $new = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder:`n{0}" -f $node.Path), 'Folder name', $cur)
+    if ($null -ne $new -and $new.Trim() -ne '') { Set-FolderName $node.Path ($new.Trim()); Render-Targets }
+  }
+  function script:Open-PathAction([string]$path) {
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+      [System.Windows.MessageBox]::Show('Item not found. Refresh the target list and try again.','scan-av') | Out-Null
+      return
     }
-    $script:trayIcon.Visible = $true
-    $script:trayIcon.ShowBalloonTip(5000, $title, $msg, $(if ($bad) { [System.Windows.Forms.ToolTipIcon]::Warning } else { [System.Windows.Forms.ToolTipIcon]::Info }))
-  } catch {}
-}
+    try {
+      if (Test-Path -LiteralPath $path -PathType Container) { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $path) }
+      else { Start-Process explorer.exe -ArgumentList ('/select,"{0}"' -f $path) }
+    } catch { [System.Windows.MessageBox]::Show("Could not open item:`n$_",'scan-av') | Out-Null }
+  }
+  function script:Open-FolderNode($node) {
+    if ($node) { Open-PathAction $node.Path }
+  }
+  function script:Move-ConfigPathPrefix([string]$oldPath, [string]$newPath) {
+    $oldFull = [IO.Path]::GetFullPath($oldPath).TrimEnd('\')
+    $newFull = [IO.Path]::GetFullPath($newPath).TrimEnd('\')
+    function local:MapPath([string]$p) {
+      if (-not $p) { return $p }
+      $full = [IO.Path]::GetFullPath($p).TrimEnd('\')
+      if ($full.Equals($oldFull, [StringComparison]::OrdinalIgnoreCase)) { return $newFull }
+      if ($full.StartsWith($oldFull + '\', [StringComparison]::OrdinalIgnoreCase)) { return $newFull + $full.Substring($oldFull.Length) }
+      return $p
+    }
+    $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | ForEach-Object { MapPath ([string]$_) })
+    foreach ($propName in @('folderNames','folderVtAll')) {
+      $prop = $script:guiCfg.PSObject.Properties[$propName]
+      if (-not $prop -or -not $prop.Value) { continue }
+      $next = New-Object PSObject
+      foreach ($p in @($prop.Value.PSObject.Properties)) {
+        Add-Member -InputObject $next -NotePropertyName (MapPath ([string]$p.Name)) -NotePropertyValue $p.Value -Force
+      }
+      $prop.Value = $next
+    }
+    Save-GuiCfg
+  }
+  function script:Get-PreferredGamesRoot([string]$path) {
+    $roots = @(@($script:guiCfg.scanFolders) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    $candidates = @($roots | Where-Object {
+      $full = [IO.Path]::GetFullPath([string]$_).TrimEnd('\')
+      (-not $path) -or -not ([IO.Path]::GetFullPath($path).TrimEnd('\').Equals($full, [StringComparison]::OrdinalIgnoreCase))
+    })
+    $games = @($candidates | Where-Object { ((Split-Path $_ -Leaf) -match '(?i)^games?$') -or ($_ -match '(?i)\\games?(\\|$)') })
+    if ($games.Count) { return [string]$games[0] }
+    return $null
+  }
+  function script:Show-MoveFolderDialog($node, [string]$PreferredDestination = '') {
+    $roots = @(@($script:guiCfg.scanFolders) | Where-Object {
+      $_ -and (Test-Path -LiteralPath $_) -and
+      -not ([IO.Path]::GetFullPath($_).TrimEnd('\').Equals([IO.Path]::GetFullPath($node.Path).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) -and
+      -not ([IO.Path]::GetFullPath($_).TrimEnd('\').StartsWith([IO.Path]::GetFullPath($node.Path).TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase))
+    })
+    if (-not $roots.Count) {
+      [System.Windows.MessageBox]::Show('Add another scan folder first, then move items between them.','scan-av') | Out-Null
+      return $null
+    }
+
+    $dlg = New-Object System.Windows.Window
+    $dlg.Title = 'Move item'
+    $dlg.Width = 560; $dlg.SizeToContent = 'Height'; $dlg.ResizeMode = 'NoResize'
+    $dlg.WindowStartupLocation = 'CenterOwner'; $dlg.Owner = $script:win
+    $dlg.Background = (WBrush '#070910'); $dlg.Foreground = (WBrush '#FFFFFF'); $dlg.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe UI'
+
+    $panel = New-Object System.Windows.Controls.StackPanel
+    $panel.Margin = New-Object System.Windows.Thickness 22
+
+    $title = New-Object System.Windows.Controls.TextBlock
+    $title.Text = 'Move or rename item'; $title.FontSize = 22; $title.FontWeight = 'SemiBold'; $title.Margin = New-Object System.Windows.Thickness 0,0,0,12
+    [void]$panel.Children.Add($title)
+
+    $from = New-Object System.Windows.Controls.TextBlock
+    $from.Text = $node.Path; $from.FontSize = 12; $from.Foreground = (WBrush '#8A93A6'); $from.TextWrapping = 'Wrap'; $from.Margin = New-Object System.Windows.Thickness 0,0,0,18
+    [void]$panel.Children.Add($from)
+
+    $destLabel = New-Object System.Windows.Controls.TextBlock
+    $destLabel.Text = 'Destination scan folder'; $destLabel.FontSize = 13; $destLabel.Foreground = (WBrush '#C7CEDA'); $destLabel.Margin = New-Object System.Windows.Thickness 0,0,0,6
+    [void]$panel.Children.Add($destLabel)
+
+    $dest = New-Object System.Windows.Controls.ComboBox
+    $dest.MinHeight = 34; $dest.Margin = New-Object System.Windows.Thickness 0,0,0,16
+    foreach ($r in $roots) { [void]$dest.Items.Add([string]$r) }
+    $dest.SelectedIndex = 0
+    if ($PreferredDestination) {
+      for ($i = 0; $i -lt $dest.Items.Count; $i++) {
+        if ([string]::Equals([string]$dest.Items[$i], $PreferredDestination, [StringComparison]::OrdinalIgnoreCase)) { $dest.SelectedIndex = $i; break }
+      }
+    }
+    [void]$panel.Children.Add($dest)
+
+    $nameLabel = New-Object System.Windows.Controls.TextBlock
+    $nameLabel.Text = 'New name'; $nameLabel.FontSize = 13; $nameLabel.Foreground = (WBrush '#C7CEDA'); $nameLabel.Margin = New-Object System.Windows.Thickness 0,0,0,6
+    [void]$panel.Children.Add($nameLabel)
+
+    $name = New-Object System.Windows.Controls.TextBox
+    $name.Text = $node.Name; $name.MinHeight = 34; $name.Padding = New-Object System.Windows.Thickness 8,5,8,5; $name.Margin = New-Object System.Windows.Thickness 0,0,0,20
+    [void]$panel.Children.Add($name)
+
+    $buttons = New-Object System.Windows.Controls.StackPanel
+    $buttons.Orientation = 'Horizontal'; $buttons.HorizontalAlignment = 'Right'
+    $cancel = New-Object System.Windows.Controls.Button; $cancel.Content = 'Cancel'; $cancel.MinWidth = 96; $cancel.Margin = New-Object System.Windows.Thickness 0,0,10,0
+    $move = New-Object System.Windows.Controls.Button; $move.Content = 'Move'; $move.MinWidth = 104
+    try { $cancel.Style = $script:win.FindResource('Soft'); $move.Style = $script:win.FindResource('Primary') } catch {}
+    $cancel.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+    $move.Add_Click({
+      $newName = ([string]$name.Text).Trim()
+      if (-not $newName) { [System.Windows.MessageBox]::Show('Enter a folder name.','scan-av') | Out-Null; return }
+      if ($newName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) { [System.Windows.MessageBox]::Show('Folder name contains characters Windows cannot use.','scan-av') | Out-Null; return }
+      $dlg.Tag = [pscustomobject]@{ Destination = [string]$dest.SelectedItem; Name = $newName }
+      $dlg.DialogResult = $true
+      $dlg.Close()
+    })
+    [void]$buttons.Children.Add($cancel); [void]$buttons.Children.Add($move); [void]$panel.Children.Add($buttons)
+    $dlg.Content = $panel
+    if ($dlg.ShowDialog() -eq $true) { return $dlg.Tag }
+    return $null
+  }
+  function script:Move-PathWithDialog([string]$path, [string]$PreferredDestination = '') {
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+      [System.Windows.MessageBox]::Show('Item not found. Refresh the target list and try again.','scan-av') | Out-Null
+      return
+    }
+    $item = Get-Item -LiteralPath $path -Force
+    $node = [pscustomobject]@{ Path = $item.FullName; Name = $item.Name; IsFolder = [bool]$item.PSIsContainer }
+    $choice = Show-MoveFolderDialog $node $PreferredDestination
+    if (-not $choice) { return }
+    $oldPath = [IO.Path]::GetFullPath($node.Path).TrimEnd('\')
+    $destRoot = [IO.Path]::GetFullPath([string]$choice.Destination).TrimEnd('\')
+    $newPath = [IO.Path]::Combine($destRoot, [string]$choice.Name)
+    if ($newPath.Equals($oldPath, [StringComparison]::OrdinalIgnoreCase)) { return }
+    if ($destRoot.Equals($oldPath, [StringComparison]::OrdinalIgnoreCase) -or $destRoot.StartsWith($oldPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+      [System.Windows.MessageBox]::Show('Cannot move a folder into itself.','scan-av') | Out-Null
+      return
+    }
+    if (Test-Path -LiteralPath $newPath) {
+      [System.Windows.MessageBox]::Show("A folder already exists there:`n$newPath",'scan-av') | Out-Null
+      return
+    }
+    if ([System.Windows.MessageBox]::Show(("Move this folder?`n`nFrom: {0}`nTo:   {1}" -f $oldPath, $newPath),'scan-av','YesNo','Question') -ne 'Yes') { return }
+    try {
+      Move-Item -LiteralPath $oldPath -Destination $newPath -ErrorAction Stop
+      if ($node.IsFolder) { Move-ConfigPathPrefix $oldPath $newPath }
+      Refresh-Targets
+      return $newPath
+    } catch {
+      [System.Windows.MessageBox]::Show("Could not move folder:`n$_",'scan-av') | Out-Null
+    }
+  }
+  function script:Move-FolderNode($node) {
+    if ($node) { Move-PathWithDialog $node.Path }
+  }
+  function script:Choose-InstallerFile([string]$folder) {
+    if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) {
+      [System.Windows.MessageBox]::Show('Installer folder not found.','scan-av') | Out-Null
+      return $null
+    }
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = 'Choose installer to run'
+    $dlg.InitialDirectory = $folder
+    $dlg.Filter = 'Installers (*.exe;*.msi;*.msix;*.appx)|*.exe;*.msi;*.msix;*.appx|All files (*.*)|*.*'
+    $dlg.CheckFileExists = $true
+    $dlg.Multiselect = $false
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.FileName }
+    return $null
+  }
+  function script:Set-SystemEnhancedDpi([string]$path) {
+    $full = [IO.Path]::GetFullPath($path)
+    $key = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+    New-Item -Path $key -Force | Out-Null
+    New-ItemProperty -Path $key -Name $full -Value '~ GDIDPISCALING DPIUNAWARE' -PropertyType String -Force | Out-Null
+  }
+  function script:Run-CleanInstaller([string]$path, [bool]$SystemEnhancedDpi = $false) {
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+      [System.Windows.MessageBox]::Show('Installer not found.','scan-av') | Out-Null
+      return
+    }
+    $mode = if ($SystemEnhancedDpi) { "`n`nHigh DPI scaling override: System (Enhanced)" } else { '' }
+    if ([System.Windows.MessageBox]::Show(("Run this clean installer now?`n`n{0}{1}" -f $path, $mode),'scan-av','YesNo','Question') -ne 'Yes') { return }
+    try {
+      if ($SystemEnhancedDpi) {
+        if ([IO.Path]::GetExtension($path).Equals('.exe', [StringComparison]::OrdinalIgnoreCase)) {
+          Set-SystemEnhancedDpi $path
+        } else {
+          [System.Windows.MessageBox]::Show('The System (Enhanced) DPI override can be applied to .exe installers only. This installer will run normally.','scan-av') | Out-Null
+        }
+      }
+      Start-Process -FilePath $path -WorkingDirectory (Split-Path $path -Parent)
+    } catch { [System.Windows.MessageBox]::Show("Could not start installer:`n$_",'scan-av') | Out-Null }
+  }
+
+  function script:Ensure-TrayIcon {
+    try {
+      if (-not $script:trayIcon) {
+        $script:trayIcon = New-Object System.Windows.Forms.NotifyIcon
+        $icoPath = Join-Path $AppDir 'icon.ico'
+        $script:trayIcon.Icon = $(if (Test-Path $icoPath) { New-Object System.Drawing.Icon($icoPath) } else { [System.Drawing.SystemIcons]::Shield })
+        $script:trayIcon.Text = 'Scan-AV'
+        $menu = New-Object System.Windows.Forms.ContextMenuStrip
+        $openItem = $menu.Items.Add('Open Scan-AV')
+        $exitItem = $menu.Items.Add('Exit')
+        $openItem.Add_Click({ try { $script:win.Dispatcher.Invoke([action]{ Restore-FromTray }) } catch {} })
+        $exitItem.Add_Click({ try { $script:win.Dispatcher.Invoke([action]{ Exit-App }) } catch {} })
+        $script:trayIcon.ContextMenuStrip = $menu
+        $script:trayIcon.Add_DoubleClick({ try { $script:win.Dispatcher.Invoke([action]{ Restore-FromTray }) } catch {} })
+      }
+      $script:trayIcon.Visible = $true
+      return $script:trayIcon
+    } catch { return $null }
+  }
+  function script:Restore-FromTray {
+    try {
+      if (-not $script:win) { return }
+      $script:win.Show()
+      if ($script:win.WindowState -eq 'Minimized') { $script:win.WindowState = 'Normal' }
+      $script:win.Activate() | Out-Null
+    } catch {}
+  }
+  function script:Hide-ToTray {
+    try {
+      $ti = Ensure-TrayIcon
+      if ($script:win) { $script:win.Hide() }
+      if ($ti) { $ti.ShowBalloonTip(3000, 'Scan-AV is still running', 'Double-click the tray icon to reopen it.', [System.Windows.Forms.ToolTipIcon]::Info) }
+    } catch {}
+  }
+  function script:Exit-App {
+    try {
+      if (-not $script:win) { return }
+      $script:win.Show()
+      if ($script:win.WindowState -eq 'Minimized') { $script:win.WindowState = 'Normal' }
+      $script:win.Activate() | Out-Null
+      $script:win.Close()
+    } catch {}
+  }
+  # One-shot balloon notification via the tray (reliable for unpackaged apps, unlike
+  # WinRT toasts which need a Start-menu shortcut with a registered AppUserModelID).
+  function script:Show-TrayToast([string]$title, [string]$msg, [bool]$bad = $false) {
+    try {
+      $ti = Ensure-TrayIcon
+      if (-not $ti) { return }
+      $ti.ShowBalloonTip(5000, $title, $msg, $(if ($bad) { [System.Windows.Forms.ToolTipIcon]::Warning } else { [System.Windows.Forms.ToolTipIcon]::Info }))
+    } catch {}
+  }
 
 # Render last-results.json as threat cards with actions (VT link / reveal /
 # quarantine) above the raw console output.
@@ -1595,7 +1982,15 @@ function script:Show-RunResults($res) {
   if (-not $script:runResults) { return }
   $script:runResults.Children.Clear()
   $threats = @($res.threats)
-  if (-not $threats.Count) { $script:runResultsWrap.Visibility = 'Collapsed'; return }
+  $clean = @($res.clean)
+  if (-not $threats.Count -and (-not $clean.Count -or [int]$res.failed -gt 0)) { $script:runResultsWrap.Visibility = 'Collapsed'; return }
+  if ($threats.Count) {
+    $script:runResultsWrap.Background = (WBrush '#170D12')
+    $script:runResultsWrap.BorderBrush = (WBrush '#5A2430')
+  } else {
+    $script:runResultsWrap.Background = (WBrush '#0D1712')
+    $script:runResultsWrap.BorderBrush = (WBrush '#255A35')
+  }
   foreach ($t in $threats) {
     $card = New-Object System.Windows.Controls.Border
     $card.Background = (WBrush '#221016'); $card.CornerRadius = New-Object System.Windows.CornerRadius 10
@@ -1632,6 +2027,85 @@ function script:Show-RunResults($res) {
     [void]$sp.Children.Add($btns)
     $card.Child = $sp
     [void]$script:runResults.Children.Add($card)
+  }
+  if (-not $threats.Count -and $clean.Count) {
+    $head = New-Object System.Windows.Controls.TextBlock
+    $head.Text = 'Clean - choose next step'
+    $head.FontSize = 16; $head.FontWeight = 'SemiBold'; $head.Foreground = (WBrush '#54D98C'); $head.Margin = New-Object System.Windows.Thickness 0,0,0,10
+    [void]$script:runResults.Children.Add($head)
+    foreach ($c in $clean) {
+      if (-not $c.target) { continue }
+      $card = New-Object System.Windows.Controls.Border
+      $card.Background = (WBrush '#102015'); $card.CornerRadius = New-Object System.Windows.CornerRadius 10
+      $card.BorderBrush = (WBrush '#255A35'); $card.BorderThickness = New-Object System.Windows.Thickness 1
+      $card.Padding = New-Object System.Windows.Thickness 12,10,12,10; $card.Margin = New-Object System.Windows.Thickness 0,0,0,8
+      $sp = New-Object System.Windows.Controls.StackPanel
+
+      $kind = if ($c.kind) { [string]$c.kind } else { 'clean item' }
+      $h = New-Object System.Windows.Controls.TextBlock
+      $h.Text = ("CLEAN: {0}   ({1})" -f $(if ($c.name) { $c.name } else { Split-Path ([string]$c.target) -Leaf }), $kind)
+      $h.FontSize = 14; $h.FontWeight = 'SemiBold'; $h.Foreground = (WBrush '#CFF7D8'); $h.TextWrapping = 'Wrap'
+      [void]$sp.Children.Add($h)
+      $p = New-Object System.Windows.Controls.TextBlock
+      $p.Text = [string]$c.target; $p.FontSize = 12; $p.Foreground = (WBrush '#8A93A6'); $p.TextWrapping = 'Wrap'; $p.Margin = New-Object System.Windows.Thickness 0,2,0,0
+      [void]$sp.Children.Add($p)
+
+      $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.Margin = New-Object System.Windows.Thickness 0,8,0,0
+      $open = New-Object System.Windows.Controls.Button; $open.Style = $script:win.FindResource('Soft'); $open.Content = 'Open'; $open.Margin = New-Object System.Windows.Thickness 0,0,10,0; $open.Tag = [string]$c.target
+      $open.Add_Click({ param($s,$e) Open-PathAction ([string]$s.Tag) })
+      [void]$btns.Children.Add($open)
+
+      $preferred = Get-PreferredGamesRoot ([string]$c.target)
+      if ($preferred) {
+        $mv = New-Object System.Windows.Controls.Button; $mv.Style = $script:win.FindResource('Soft'); $mv.Content = 'Move to Games'; $mv.Margin = New-Object System.Windows.Thickness 0,0,10,0; $mv.Tag = [pscustomobject]@{ Path = [string]$c.target; Destination = $preferred }
+        $mv.Add_Click({
+          param($s,$e)
+          $tag = $s.Tag
+          $newPath = Move-PathWithDialog ([string]$tag.Path) ([string]$tag.Destination)
+          if ($newPath) { $s.Content = 'Moved'; $s.IsEnabled = $false }
+        })
+        [void]$btns.Children.Add($mv)
+      }
+
+      $rename = New-Object System.Windows.Controls.Button; $rename.Style = $script:win.FindResource('Soft'); $rename.Content = 'Rename + Move'; $rename.Margin = New-Object System.Windows.Thickness 0,0,10,0; $rename.Tag = [string]$c.target
+      $rename.Add_Click({
+        param($s,$e)
+        $newPath = Move-PathWithDialog ([string]$s.Tag) (Get-PreferredGamesRoot ([string]$s.Tag))
+        if ($newPath) { $s.Content = 'Moved'; $s.IsEnabled = $false }
+      })
+      [void]$btns.Children.Add($rename)
+
+      if ($c.isFolder) {
+        $pick = New-Object System.Windows.Controls.Button; $pick.Style = $script:win.FindResource('Soft'); $pick.Content = 'Choose Installer'; $pick.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pick.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $false }
+        $pick.Add_Click({
+          param($s,$e)
+          $tag = $s.Tag
+          $installer = Choose-InstallerFile ([string]$tag.Folder)
+          if ($installer) { Run-CleanInstaller $installer ([bool]$tag.Dpi) }
+        })
+        [void]$btns.Children.Add($pick)
+
+        $pickDpi = New-Object System.Windows.Controls.Button; $pickDpi.Style = $script:win.FindResource('Soft'); $pickDpi.Content = 'Choose Installer (DPI)'; $pickDpi.Margin = New-Object System.Windows.Thickness 0,0,10,0; $pickDpi.Tag = [pscustomobject]@{ Folder = [string]$c.target; Dpi = $true }
+        $pickDpi.Add_Click({
+          param($s,$e)
+          $tag = $s.Tag
+          $installer = Choose-InstallerFile ([string]$tag.Folder)
+          if ($installer) { Run-CleanInstaller $installer ([bool]$tag.Dpi) }
+        })
+        [void]$btns.Children.Add($pickDpi)
+      } elseif ($c.installerPath) {
+        $run = New-Object System.Windows.Controls.Button; $run.Style = $script:win.FindResource('Primary'); $run.Content = 'Run Installer'; $run.Margin = New-Object System.Windows.Thickness 0,0,10,0; $run.Tag = [pscustomobject]@{ Path = [string]$c.installerPath; Dpi = $false }
+        $run.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanInstaller ([string]$tag.Path) ([bool]$tag.Dpi) })
+        [void]$btns.Children.Add($run)
+
+        $runDpi = New-Object System.Windows.Controls.Button; $runDpi.Style = $script:win.FindResource('Soft'); $runDpi.Content = 'Run Installer (DPI)'; $runDpi.Tag = [pscustomobject]@{ Path = [string]$c.installerPath; Dpi = $true }
+        $runDpi.Add_Click({ param($s,$e) $tag = $s.Tag; Run-CleanInstaller ([string]$tag.Path) ([bool]$tag.Dpi) })
+        [void]$btns.Children.Add($runDpi)
+      }
+      [void]$sp.Children.Add($btns)
+      $card.Child = $sp
+      [void]$script:runResults.Children.Add($card)
+    }
   }
   $script:runResultsWrap.Visibility = 'Visible'
 }
@@ -1830,6 +2304,7 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
   $script:guiCfg = $cfg
   $ps1 = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $AppDir 'scan-av.ps1' }
   $script:guiPs1 = $ps1
+  try { Ensure-StandaloneLauncher -Quiet | Out-Null } catch {}
   try { Install-ContextMenu | Out-Null } catch {}
   # refresh an existing desktop shortcut so it picks up the current app icon (the
   # self-updater only refreshes the script, not the shortcut). Recreate it (keeps
@@ -1913,6 +2388,8 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
           <Button x:Name="BtnSettings" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Settings" FontSize="15"/></StackPanel></Button>
+          <Button x:Name="BtnTray" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Tray" FontSize="15"/></StackPanel></Button>
+          <Button x:Name="BtnExit" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="16" Margin="0,0,8,0"/><TextBlock Text="Exit" FontSize="15"/></StackPanel></Button>
           <Button x:Name="BtnMore" Style="{StaticResource Soft}"><TextBlock Text="&#xE712;" FontFamily="Segoe MDL2 Assets" FontSize="16"/></Button>
         </StackPanel>
       </Grid>
@@ -2271,6 +2748,8 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
   (& $find 'NavSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
   (& $find 'NavAbout').Add_Click({ Show-Page 'About' })
   (& $find 'BtnSettings').Add_Click({ & $loadSettings; Show-Page 'Settings' })
+  (& $find 'BtnTray').Add_Click({ Hide-ToTray })
+  (& $find 'BtnExit').Add_Click({ Exit-App })
   (& $find 'BtnMore').Add_Click($doUpdateApp)
   (& $find 'BtnSaveSettings').Add_Click($saveSettings)
   (& $find 'BtnReloadSettings').Add_Click($loadSettings)
@@ -2623,6 +3102,7 @@ Write-Host ''
 Sec 'SUMMARY'
 $threats = @($all | Where-Object { $_.Hits -gt 0 })
 $failed  = @($all | Where-Object { $_.Hits -eq 0 -and -not $_.Valid })
+$clean   = @($all | Where-Object { $_.Hits -eq 0 -and $_.Valid })
 foreach ($r in $all) {
   if ($r.Hits -gt 0) {
     $vtStr = ''
@@ -2655,7 +3135,45 @@ try {
        vtLink = $(if ($shas.Count) { 'https://www.virustotal.com/gui/file/' + $shas[0] } else { '' })
        qpaths = @($_.QPaths) }
   })
-  @{ utc = [DateTime]::UtcNow.ToString('o'); scanned = $all.Count; skipped = $skipped; failed = $failed.Count; threats = $tRecs } |
+  $installerName = '(?i)(^|[\s._-])(setup|install|installer|redist|vcredist|dxsetup)([\s._-]|$)'
+  $cRecs = @($clean | ForEach-Object {
+    $target = [string]$_.Target
+    $name = Split-Path $target -Leaf
+    $kind = 'clean item'
+    $installerPath = ''
+    $isFolder = $false
+    try {
+      if (Test-Path -LiteralPath $target -PathType Container) {
+        $isFolder = $true
+        $installer = Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue |
+          Where-Object { $_.Extension -match '^\.(msi|msix|appx|exe)$' -and ($_.BaseName -match $installerName) } |
+          Select-Object -First 1
+        if ($installer) {
+          $kind = 'installer folder'
+        } else {
+          $exe = Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue -Filter *.exe | Select-Object -First 1
+          $kind = if ($exe) { 'portable folder' } else { 'clean folder' }
+        }
+      } else {
+        $ext = [IO.Path]::GetExtension($target).ToLowerInvariant()
+        if ($ext -in @('.msi','.msix','.appx')) {
+          $kind = 'installer'
+          $installerPath = $target
+        } elseif ($ext -eq '.exe' -and ([IO.Path]::GetFileNameWithoutExtension($target) -match $installerName)) {
+          $kind = 'installer'
+          $installerPath = $target
+        } elseif ($ArchiveExt -contains $ext) {
+          $kind = 'archive'
+        } elseif ($ext -eq '.exe') {
+          $kind = 'executable'
+        } else {
+          $kind = 'clean file'
+        }
+      }
+    } catch {}
+    @{ target = $target; name = $name; kind = $kind; isFolder = $isFolder; installerPath = $installerPath }
+  })
+  @{ utc = [DateTime]::UtcNow.ToString('o'); scanned = $all.Count; skipped = $skipped; failed = $failed.Count; threats = $tRecs; clean = $cRecs } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $AppDir 'last-results.json') -Encoding UTF8
 } catch {}
 
