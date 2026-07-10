@@ -39,6 +39,10 @@ throttled to the free tier's 4 requests/minute. Two further VT options:
   VirusTotal on every scan, even when the local engines find nothing (catches
   fresh malware that signatures miss; ≥3 VT engines flagging counts as a
   detection). Default is flagged-files-only. `-VtAll` forces it for one CLI run.
+- **Per-folder exclusions** — expand a scan folder and click the **SKIP** badge on
+  any sub-folder to exclude it (and everything under it) from **every** scan, always,
+  even when its parent library is scanned. Excluded folders are dimmed in the app;
+  clear the badge to re-include them.
 - **Upload unknown files** (opt-in, Settings) — files VirusTotal has never seen
   are submitted for a full multi-engine analysis (max 650 MB; uploads are shared
   with the VT community, so never enable it for folders holding private files).

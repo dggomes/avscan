@@ -1692,6 +1692,9 @@ function script:New-TargetCard($node) {
   $card.Margin = New-Object System.Windows.Thickness (($node.Depth * 26),0,0,8)
   $card.Padding = New-Object System.Windows.Thickness 14,10,14,10
   $card.MinHeight = 62; $card.Cursor = [System.Windows.Input.Cursors]::Hand; $card.Tag = $node
+  # Excluded sub-folders are dimmed so it's obvious at a glance they won't be scanned.
+  $isExcluded = $node.IsFolder -and (Get-FolderExclude $node.Path)
+  if ($isExcluded) { $card.Opacity = 0.5 }
 
   $g = New-Object System.Windows.Controls.Grid
   $gAuto = [System.Windows.GridLength]::Auto
@@ -1736,6 +1739,23 @@ function script:New-TargetCard($node) {
     $vtb.Child = $vtt
     $vtb.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; $n = $s.Tag; Set-FolderVtAll $n.Path (-not (Get-FolderVtAll $n.Path)); Render-Targets })
     [void]$tr.Children.Add($vtb)
+  }
+  if ($node.IsFolder -and $node.Depth -gt 0) {
+    # "SKIP" badge on sub-folders: toggles permanent exclusion from every scan, even
+    # when the parent library is scanned. Roots aren't shown it - remove them instead.
+    $exb = New-Object System.Windows.Controls.Border
+    $exb.CornerRadius = New-Object System.Windows.CornerRadius 8
+    $exb.Padding = New-Object System.Windows.Thickness 9,4,9,4
+    $exb.Margin = New-Object System.Windows.Thickness 0,0,14,0
+    $exb.VerticalAlignment = 'Center'; $exb.Cursor = [System.Windows.Input.Cursors]::Hand; $exb.Tag = $node
+    $exb.Background = (WBrush $(if ($isExcluded) { '#E8A13A' } else { '#1A2231' }))
+    $exb.ToolTip = "Exclude this sub-folder from scans`nON: always skipped, even when its library is scanned`nOFF (default): scanned normally"
+    $ext = New-Object System.Windows.Controls.TextBlock
+    $ext.Text = 'SKIP'; $ext.FontSize = 12; $ext.FontWeight = 'SemiBold'
+    $ext.Foreground = (WBrush $(if ($isExcluded) { '#1A1205' } else { '#8A93A6' }))
+    $exb.Child = $ext
+    $exb.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; $n = $s.Tag; Set-FolderExclude $n.Path (-not (Get-FolderExclude $n.Path)); Render-Targets })
+    [void]$tr.Children.Add($exb)
   }
   if ($node.IsFolder) {
     $open = New-Object System.Windows.Controls.TextBlock
@@ -1936,6 +1956,31 @@ function script:Set-FolderVtAll([string]$path, [bool]$v) {
   Save-GuiCfg
 }
 
+# Per-folder scan exclusion, stored in config.folderExclude keyed by full path.
+# ON = this sub-folder (and everything under it) is skipped by every scan, always,
+# even when its parent library is scanned. OFF (default) = scanned normally.
+function script:Ensure-FolderExclude {
+  if (-not $script:guiCfg.PSObject.Properties['folderExclude']) {
+    Add-Member -InputObject $script:guiCfg -NotePropertyName folderExclude -NotePropertyValue (New-Object PSObject) -Force
+  }
+}
+function script:Get-FolderExclude([string]$path) {
+  try { $p = $script:guiCfg.folderExclude.PSObject.Properties[$path]; if ($p) { return [bool]$p.Value } } catch {}
+  return $false
+}
+function script:Set-FolderExclude([string]$path, [bool]$v) {
+  Ensure-FolderExclude
+  $p = $script:guiCfg.folderExclude.PSObject.Properties[$path]
+  if ($v) {
+    if ($p) { $p.Value = $true } else { Add-Member -InputObject $script:guiCfg.folderExclude -NotePropertyName $path -NotePropertyValue $true -Force }
+  } elseif ($p) {
+    # OFF is the default - drop the key rather than storing $false, so the exclusion
+    # list only ever holds the folders the user actively chose to skip.
+    $script:guiCfg.folderExclude.PSObject.Properties.Remove($path)
+  }
+  Save-GuiCfg
+}
+
 # Folder picker used by both the dashboard "Add Folder" tile and the "Add" button
 # in the Scan Targets header. It includes manual path entry because elevated apps
 # may not see all network drives mapped in the user's unelevated Explorer session.
@@ -2057,13 +2102,15 @@ function script:Remove-ScanFolderPath([string]$path) {
     -not [string]::Equals($cur, $target, [StringComparison]::OrdinalIgnoreCase)
   })
   if (@($script:guiCfg.scanFolders).Count -eq $before.Count) { return $false }
-  foreach ($propName in @('folderNames','folderVtAll')) {
+  foreach ($propName in @('folderNames','folderVtAll','folderExclude')) {
     $prop = $script:guiCfg.PSObject.Properties[$propName]
     if (-not $prop -or -not $prop.Value) { continue }
     foreach ($existing in @($prop.Value.PSObject.Properties)) {
       $key = Normalize-ScanFolderPath ([string]$existing.Name)
       if (-not $key) { $key = ([string]$existing.Name).TrimEnd('\','/') }
-      if ([string]::Equals($key, $target, [StringComparison]::OrdinalIgnoreCase)) {
+      # exact root match, or a sub-folder under it (folderExclude keys are sub-folders)
+      if ([string]::Equals($key, $target, [StringComparison]::OrdinalIgnoreCase) -or
+          $key.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) {
         $prop.Value.PSObject.Properties.Remove($existing.Name)
       }
     }
@@ -2812,7 +2859,7 @@ function script:Invoke-AddScanFolderDialog {
       return $p
     }
     $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | ForEach-Object { MapPath ([string]$_) })
-    foreach ($propName in @('folderNames','folderVtAll')) {
+    foreach ($propName in @('folderNames','folderVtAll','folderExclude')) {
       $prop = $script:guiCfg.PSObject.Properties[$propName]
       if (-not $prop -or -not $prop.Value) { continue }
       $next = New-Object PSObject
@@ -4116,19 +4163,67 @@ if ($incremental -and -not $rescanAll -and -not $NoPrompt -and $cache.Count -gt 
 # DB-reload storm (each clamscan invocation reloads the whole ~3.6M-sig DB).
 $rootSet = @{}
 foreach ($rf in @($cfg.scanFolders)) { if ($rf) { $rootSet[([string]$rf).TrimEnd('\','/').ToLowerInvariant()] = $true } }
+
+# Per-folder exclusions (config.folderExclude, set via the SKIP badge in the app):
+# folders the user marked to skip on every scan. Honoured at unit granularity AND by
+# pruning excluded branches out of any container that would otherwise be scanned whole
+# recursively - so a deeply nested excluded folder is never reached, regardless of engine.
+$excludeSet = @{}
+try {
+  if ($cfg.PSObject.Properties['folderExclude']) {
+    foreach ($p in $cfg.folderExclude.PSObject.Properties) {
+      # canonicalize: trim trailing separators, lower-case, unify '/' -> '\' so the
+      # comparison holds no matter how the path was stored or which separator it uses.
+      if ([bool]$p.Value) { $excludeSet[([string]$p.Name).TrimEnd('\','/').ToLowerInvariant().Replace('/','\')] = $true }
+    }
+  }
+} catch {}
+function script:Test-Excluded([string]$path) {
+  if (-not $excludeSet.Count) { return $false }
+  $lp = ([string]$path).TrimEnd('\','/').ToLowerInvariant().Replace('/','\')
+  foreach ($k in $excludeSet.Keys) { if ($lp -eq $k -or $lp.StartsWith($k + '\')) { return $true } }
+  return $false
+}
+function script:Test-ContainsExcluded([string]$path) {
+  if (-not $excludeSet.Count) { return $false }
+  $lp = ([string]$path).TrimEnd('\','/').ToLowerInvariant().Replace('/','\')
+  foreach ($k in $excludeSet.Keys) { if ($k.StartsWith($lp + '\')) { return $true } }
+  return $false
+}
+# Descend a container that holds excluded descendants, emitting each non-excluded
+# child as a unit and recursing only into branches that hide a deeper exclusion.
+function script:Expand-PrunedUnits([string]$path) {
+  $out = @()
+  foreach ($k in @(Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue)) {
+    $fp = $k.FullName
+    if (Test-Excluded $fp) { continue }
+    if ($k.PSIsContainer -and (Test-ContainsExcluded $fp)) { $out += Expand-PrunedUnits $fp }
+    else { $out += $fp }
+  }
+  return $out
+}
 $units = @()
 foreach ($t in $targets) {
+  if (Test-Excluded $t) { continue }   # the target itself is excluded -> skip entirely
   $isRoot = $rootSet.ContainsKey(([string]$t).TrimEnd('\','/').ToLowerInvariant())
   if ($incremental -and $isRoot -and (Test-Path -LiteralPath $t -PathType Container)) {
     $kids = @(Get-ChildItem -LiteralPath $t -Force -ErrorAction SilentlyContinue)
     $subDirs    = @($kids | Where-Object { $_.PSIsContainer })
     $looseFiles = @($kids | Where-Object { -not $_.PSIsContainer })
     if ($subDirs.Count -gt 0) {
-      $subDirs    | ForEach-Object { $units += $_.FullName }   # each immediate child folder = its own unit
-      $looseFiles | ForEach-Object { $units += $_.FullName }   # loose archives/files at the root
+      foreach ($d in $subDirs) {
+        if (Test-Excluded $d.FullName) { continue }                                  # excluded sub-folder -> skip
+        if (Test-ContainsExcluded $d.FullName) { $units += Expand-PrunedUnits $d.FullName }  # holds a deeper exclusion -> prune
+        else { $units += $d.FullName }                                               # each immediate child folder = its own unit
+      }
+      foreach ($f in $looseFiles) { if (-not (Test-Excluded $f.FullName)) { $units += $f.FullName } }   # loose archives/files at the root
+    } elseif (Test-ContainsExcluded $t) {
+      $units += Expand-PrunedUnits $t   # no sub-folders yet but holds an exclusion -> prune
     } else {
       $units += $t   # library with no sub-folders yet -> scan whole
     }
+  } elseif ((Test-Path -LiteralPath $t -PathType Container) -and (Test-ContainsExcluded $t)) {
+    $units += Expand-PrunedUnits $t   # content folder hiding an exclusion -> prune instead of one recursive scan
   } else { $units += $t }   # a specific content folder -> one recursive scan
 }
 
@@ -4145,6 +4240,10 @@ $plan = New-Object System.Collections.Generic.List[string]
 [void]$plan.Add(("incremental={0}  rescanAll={1}  engines={2}" -f $incremental, $rescanAll, ($engines -join '+')))
 [void]$plan.Add(("configured scanFolders ({0}):" -f @($cfg.scanFolders).Count))
 foreach ($f in @($cfg.scanFolders)) { [void]$plan.Add("    [root] $f") }
+if ($excludeSet.Count) {
+  [void]$plan.Add(("excluded folders ({0}) - always skipped:" -f $excludeSet.Count))
+  foreach ($k in $excludeSet.Keys) { [void]$plan.Add("    [skip] $k") }
+}
 [void]$plan.Add(("targets this run ({0}):" -f @($targets).Count))
 foreach ($t in @($targets)) { [void]$plan.Add(("    {0}{1}" -f $t, $(if ($rootSet.ContainsKey(([string]$t).TrimEnd('\','/').ToLowerInvariant())) { '   <- watched root (expanded)' } else { '   <- single item (whole scan)' }))) }
 [void]$plan.Add(("expanded into {0} unit(s):" -f @($units).Count))
