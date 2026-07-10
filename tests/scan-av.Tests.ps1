@@ -46,17 +46,24 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnEdit','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel') {
+  foreach ($need in 'BtnAddTop','BtnRefresh','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel') {
     Assert ($names -contains $need) "XAML control $need present"
   }
   Assert ($names -notcontains 'BtnTray') 'XAML control BtnTray removed'
+  Assert ($names -notcontains 'BtnEdit') 'XAML control BtnEdit removed (per-folder X replaces bulk Remove)'
 } catch { Assert $false 'XAML well-formed' "$_" }
 
 # ---- 3. app workflow functions are present ----
-foreach ($fnName in @('New-UpdaterShortcut','Open-FolderNode','Move-FolderNode','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Show-NativeAddFolderDialog','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Select-InlineAddFolderPath','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
+foreach ($fnName in @('New-UpdaterShortcut','Open-FolderNode','Move-FolderNode','Remove-FolderNode','Remove-ScanFolderPath','Move-PathWithDialog','Get-PreferredMoveRoot','Choose-FolderForMove','Choose-ExecutableFile','Set-SystemEnhancedDpi','Run-CleanExecutable','Show-MoveFolderDialog','Show-CleanNextStepDialog','Invoke-CleanRenameMove','Invoke-CleanRunExe','Ensure-TrayIcon','Hide-ToTray','Exit-App','Show-ExitChoiceDialog','Restart-AppViaLauncher','Normalize-ScanFolderPath','Get-KnownNetworkFolders','Add-ScanFolderPath','Add-ScanFolderPaths','Show-NativeAddFolderDialog','Get-AddScanFolderRoots','Refresh-InlineAddFolderRoots','Load-InlineAddFolder','Select-InlineAddFolderPath','Show-InlineAddFolderPanel','Hide-InlineAddFolderPanel','Show-AddScanFolderSimpleDialog','Show-SafeFolderPicker','Add-ScanFolderDialog','Show-AddScanFolderWinFormsDialog','Show-AddScanFolderFallbackDialog','Invoke-AddScanFolderDialog')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq $fnName -or $n.Name -eq "script:$fnName") }, $true) | Select-Object -First 1
   Assert ($null -ne $f) "function $fnName found"
 }
+$newCardFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'New-TargetCard' -or $n.Name -eq 'script:New-TargetCard') }, $true) | Select-Object -First 1
+Assert ($newCardFn -and $newCardFn.Extent.Text -match 'Remove-FolderNode' -and $newCardFn.Extent.Text -match '0xE711' -and $newCardFn.Extent.Text -match 'Depth -eq 0') `
+  'each root folder card has an X button to remove it from the scan list'
+$removeFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Remove-FolderNode' -or $n.Name -eq 'script:Remove-FolderNode') }, $true) | Select-Object -First 1
+Assert ($removeFn -and $removeFn.Extent.Text -match 'Remove-ScanFolderPath' -and $removeFn.Extent.Text -match 'not deleted') `
+  'per-folder remove confirms and only drops the path from the scan list'
 $showResultsFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-RunResults' -or $n.Name -eq 'script:Show-RunResults') }, $true) | Select-Object -First 1
 $cleanDialogFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Show-CleanNextStepDialog' -or $n.Name -eq 'script:Show-CleanNextStepDialog') }, $true) | Select-Object -First 1
 Assert ($showResultsFn -and $showResultsFn.Extent.Text -match 'Show-CleanNextStepDialog' -and $showResultsFn.Extent.Text -notmatch 'Clean - choose next step') `

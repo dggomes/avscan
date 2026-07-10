@@ -1761,6 +1761,16 @@ function script:New-TargetCard($node) {
     $pen.ToolTip = 'Edit display name'
     $pen.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; Rename-FolderNode $s.Tag })
     [void]$tr.Children.Add($pen)
+
+    if ($node.Depth -eq 0) {
+      $rm = New-Object System.Windows.Controls.TextBlock
+      $rm.Text = [string][char]0xE711   # X - remove from scan list
+      $rm.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+      $rm.FontSize = 16; $rm.Foreground = (WBrush '#8A93A6'); $rm.Margin = New-Object System.Windows.Thickness 0,0,16,0; $rm.VerticalAlignment = 'Center'; $rm.Cursor = [System.Windows.Input.Cursors]::Hand; $rm.Tag = $node
+      $rm.ToolTip = 'Remove from scan list'
+      $rm.Add_MouseLeftButtonUp({ param($s,$e) $e.Handled = $true; Remove-FolderNode $s.Tag })
+      [void]$tr.Children.Add($rm)
+    }
   }
   if ($node.IsFolder -and $node.HasChildren) {
     $chev = New-Object System.Windows.Controls.TextBlock
@@ -2033,6 +2043,32 @@ function script:Add-ScanFolderPath([string]$path, [switch]$NoNamePrompt) {
     $nm = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder (optional):`n{0}" -f $p), 'Folder name', $defaultName)
     if ($null -ne $nm -and $nm.Trim() -ne '') { Set-FolderName $p ($nm.Trim()) } else { Save-GuiCfg }
   }
+  Rebuild-Roots
+  return $true
+}
+function script:Remove-ScanFolderPath([string]$path) {
+  if (-not $path) { return $false }
+  $target = Normalize-ScanFolderPath $path
+  if (-not $target) { $target = $path.TrimEnd('\','/') }
+  $before = @($script:guiCfg.scanFolders)
+  $script:guiCfg.scanFolders = @($before | Where-Object {
+    $cur = Normalize-ScanFolderPath ([string]$_)
+    if (-not $cur) { $cur = ([string]$_).TrimEnd('\','/') }
+    -not [string]::Equals($cur, $target, [StringComparison]::OrdinalIgnoreCase)
+  })
+  if (@($script:guiCfg.scanFolders).Count -eq $before.Count) { return $false }
+  foreach ($propName in @('folderNames','folderVtAll')) {
+    $prop = $script:guiCfg.PSObject.Properties[$propName]
+    if (-not $prop -or -not $prop.Value) { continue }
+    foreach ($existing in @($prop.Value.PSObject.Properties)) {
+      $key = Normalize-ScanFolderPath ([string]$existing.Name)
+      if (-not $key) { $key = ([string]$existing.Name).TrimEnd('\','/') }
+      if ([string]::Equals($key, $target, [StringComparison]::OrdinalIgnoreCase)) {
+        $prop.Value.PSObject.Properties.Remove($existing.Name)
+      }
+    }
+  }
+  Save-GuiCfg
   Rebuild-Roots
   return $true
 }
@@ -2745,6 +2781,13 @@ function script:Invoke-AddScanFolderDialog {
     $new = [Microsoft.VisualBasic.Interaction]::InputBox(("Display name for this folder:`n{0}" -f $node.Path), 'Folder name', $cur)
     if ($null -ne $new -and $new.Trim() -ne '') { Set-FolderName $node.Path ($new.Trim()); Render-Targets }
   }
+  function script:Remove-FolderNode($node) {
+    if (-not $node -or -not $node.IsFolder -or $node.Depth -ne 0) { return }
+    $label = Get-FolderName $node.Path; if (-not $label) { $label = $node.Name }
+    $msg = "Remove '{0}' from the scan list?`n`n{1}`n`n(The folder itself is not deleted.)" -f $label, $node.Path
+    if (([System.Windows.MessageBox]::Show($msg,'scan-av','YesNo','Question')) -ne 'Yes') { return }
+    [void](Remove-ScanFolderPath $node.Path)
+  }
   function script:Open-PathAction([string]$path) {
     if (-not $path -or -not (Test-Path -LiteralPath $path)) {
       [System.Windows.MessageBox]::Show('Item not found. Refresh the target list and try again.','scan-av') | Out-Null
@@ -3451,8 +3494,7 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
                 <StackPanel HorizontalAlignment="Left"><TextBlock Text="Scan Targets" FontSize="22" FontWeight="Bold"/><TextBlock Text="Tap a row to expand  -  tap the box to select" FontSize="13" Foreground="#8A93A6" Margin="0,2,0,0"/></StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
                   <Button x:Name="BtnAddTop" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Add" FontSize="14"/></StackPanel></Button>
-                  <Button x:Name="BtnRefresh" Style="{StaticResource Soft}" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Refresh" FontSize="14"/></StackPanel></Button>
-                  <Button x:Name="BtnEdit" Style="{StaticResource Soft}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Remove" FontSize="14"/></StackPanel></Button>
+                  <Button x:Name="BtnRefresh" Style="{StaticResource Soft}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0"/><TextBlock Text="Refresh" FontSize="14"/></StackPanel></Button>
                 </StackPanel>
               </Grid>
               <Border x:Name="AddFolderPanel" Grid.Row="1" CornerRadius="14" Background="#0B0F18" BorderBrush="#2A3344" BorderThickness="1" Padding="14" Margin="0,0,0,12" Visibility="Collapsed">
@@ -3830,11 +3872,6 @@ public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr i
   (& $find 'TileLogs').Add_Click({ Show-LogsInApp })
   (& $find 'TileAdd').Add_Click({ Show-NativeAddFolderDialog })
   (& $find 'BtnAddTop').Add_Click({ Show-NativeAddFolderDialog })
-  (& $find 'BtnEdit').Add_Click({
-    $tops = @($script:rootNodes | Where-Object { $_.Checked } | ForEach-Object { $_.Path })
-    if (-not $tops.Count) { [System.Windows.MessageBox]::Show('Check the top-level folder(s) to remove from the scan list, then tap Remove. (Use Add to add a new folder.)','scan-av') | Out-Null; return }
-    if (& $confirm ("Remove {0} folder(s) from the scan list?" -f $tops.Count)) { $script:guiCfg.scanFolders = @(@($script:guiCfg.scanFolders) | Where-Object { $tops -notcontains $_ }); Save-GuiCfg; Rebuild-Roots }
-  })
   (& $find 'BtnRefresh').Add_Click({ Refresh-Targets })
   # Auto-refresh the target tree from disk whenever the window is brought forward
   # (e.g. after creating a folder in Explorer and switching back). Debounced so
