@@ -74,7 +74,8 @@ Launching the **Scan-AV** desktop shortcut opens a dark, touch-first dashboard:
 - A protection-status hero and a prominent **Scan Now** action.
 - **Scan Targets** as expandable cards with large checkboxes — pick whole folders or specific sub-folders; give folders custom display names.
 - Folder cards include quick actions to open in Explorer, move/rename into another configured scan folder, or edit the display label.
-- Action tiles: Scan All, Scan Checked, Update Definitions, Update App, View Logs, Add Folder. Add Folder uses the native Windows folder picker to choose a scan target.
+- Action tiles: Scan All, Scan Checked, **Quick Scan**, Update Definitions, Update App, View Logs, Add Folder. Add Folder uses the native Windows folder picker to choose a scan target.
+- **Quick Scan** runs Microsoft Defender over **only the `.exe`/`.dll` files** in the checked folders (or every configured folder if nothing is checked) and asks whether to re-scan everything (Full) or only new/changed binaries (Incremental).
 - Pages in a left nav rail: **Dashboard / Scan / Updates / Logs / Settings / About**. Scans run in-app and keep running when you switch pages; a header progress bar shows activity.
 - Clean scan results show a next-step modal: close, choose a folder to rename/move into another configured scan folder, or choose an `.exe` to run. The run action can apply Windows' **System (Enhanced)** high-DPI compatibility override.
 - In-app **Settings** (engines, third-party signatures, VirusTotal API key, scan mode, size limits, auto-update, incremental) and a **log browser**.
@@ -101,6 +102,8 @@ scan-av -SelfUpdate   # update to the latest version from GitHub
 ```powershell
 scan-av                                 # scan configured folders, both engines
 scan-av -Path 'D:\Downloads\file.rar'   # scan one archive or folder
+scan-av -QuickScan                      # Defender-only sweep of every .exe/.dll (incremental)
+scan-av -QuickScan -RescanAll           # ...re-checking every executable, ignoring the cache
 scan-av -Update                         # force a definition refresh
 scan-av -RescanAll                      # ignore the cache and re-scan everything
 scan-av -VtAll                          # also VT-check new executables this run
@@ -116,6 +119,7 @@ Exit codes: `0` clean, `1` threats found, `2` some items could not be scanned.
 
 ### Behavior
 
+- **Quick Scan** (`-QuickScan`) — a fast, Microsoft Defender-only pass that inspects **only executable code** (`.exe` / `.dll`) inside the target folders and ignores every other file type. Each executable is its own cache unit, so with the incremental cache a repeat Quick Scan only re-checks binaries that are **new or changed**; `-RescanAll` (or the app's "Full" choice) re-checks all of them. It ignores `-Engine` (always Defender) and honours the same per-folder SKIP exclusions as a normal scan.
 - **Incremental scanning** — a cache (`%LOCALAPPDATA%\ScanAV\scan-cache.json`) records what has been scanned; unchanged items are skipped on later runs. Change is detected by size + modified-time (no re-hashing). `-RescanAll` forces a full re-scan. Items whose scan **failed** (engine error, encrypted/corrupt archive) are never cached as clean — they are reported and retried on the next run.
 - **Move-aware** — an item scanned clean and then **moved (or copied) to another watched folder is not re-scanned**: a clean cache entry with the same name and identical content signature (file count + total size + newest modified-time) is recognised as the same content at a new path and migrated. Renamed or modified items still re-scan.
 - **Batched ClamAV** — all in-place items in a run are scanned in **one** clamscan invocation, so the multi-second signature-database load happens once instead of once per folder. Results are attributed back per item, so incremental caching still works per folder.

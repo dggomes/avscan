@@ -34,10 +34,10 @@ Assert ($updaterShortcutFn -and $updaterShortcutFn.Extent.Text -match 'Ensure-Up
 Assert ($updateFn -and $updateFn.Extent.Text -match 'Ensure-StandaloneLauncher' -and $updateFn.Extent.Text -match 'Standalone launcher' -and $updateFn.Extent.Text -match 'Ensure-UpdaterLauncher' -and $updateFn.Extent.Text -match 'Updater launcher') `
   'self-update refreshes standalone and updater launchers'
 $src = Get-Content $srcPath -Raw
-$verMatch = [regex]::Match($src, "\$ScanAvVersion\s*=\s*'([^']+)'")
-$buildMatch = [regex]::Match($src, "\$ScanAvBuild\s*=\s*'([^']+)'")
-Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.10.5')) 'app version bumped for updater visibility'
-Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-07') 'app build date current'
+$verMatch = [regex]::Match($src, "\`$ScanAvVersion\s*=\s*'([^']+)'")
+$buildMatch = [regex]::Match($src, "\`$ScanAvBuild\s*=\s*'([^']+)'")
+Assert ($verMatch.Success -and ([version]$verMatch.Groups[1].Value -ge [version]'1.11.0')) 'app version bumped for updater visibility'
+Assert ($buildMatch.Success -and $buildMatch.Groups[1].Value -eq '2026-07-24') 'app build date current'
 
 # ---- 2. embedded XAML is well-formed and has the expected controls ----
 $m = [regex]::Match($src, '(?s)\$xaml = @"(.*?)\r?\n"@')
@@ -46,7 +46,7 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnRefresh','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel') {
+  foreach ($need in 'BtnAddTop','BtnRefresh','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel','TileQuickScan') {
     Assert ($names -contains $need) "XAML control $need present"
   }
   Assert ($names -notcontains 'BtnTray') 'XAML control BtnTray removed'
@@ -101,9 +101,9 @@ Assert ($inlineShowFn -and $inlineShowFn.Extent.Text -match 'Refresh-InlineAddFo
   'inline add folder panel opens inside main window without loading a secondary dialog'
 Assert ($inlineLoadFn -and $inlineLoadFn.Extent.Text -match 'Get-ChildItem' -and $inlineLoadFn.Extent.Text -match 'UNC path') `
   'inline add folder browser lists subfolders and explains UNC fallback'
-Assert ($inlineSelectFn -and $inlineSelectFn.Extent.Text -match 'SelectedItem' -and $src -match 'Content="Select"' -and $src -match "AddFolderOpen.*Add_Click\\(\\{ Select-InlineAddFolderPath \\}" -and $src -notmatch "AddFolderOpen.*Add_Click\\(\\{ Load-InlineAddFolder") `
+Assert ($inlineSelectFn -and $inlineSelectFn.Extent.Text -match 'SelectedItem' -and $src -match 'Content="Select"' -and $src -match "AddFolderOpen.*Add_Click\(\{ Select-InlineAddFolderPath \}" -and $src -notmatch "AddFolderOpen.*Add_Click\(\{ Load-InlineAddFolder") `
   'inline add folder Select button chooses highlighted folder instead of navigating into it'
-Assert ($nativeAddFn -and $nativeAddFn.Extent.Text -match 'FolderBrowserDialog' -and $nativeAddFn.Extent.Text -match 'Add-ScanFolderPath' -and $src -match "TileAdd'\\)\\.Add_Click\\(\\{ Show-NativeAddFolderDialog \\}" -and $src -match "BtnAddTop'\\)\\.Add_Click\\(\\{ Show-NativeAddFolderDialog \\}") `
+Assert ($nativeAddFn -and $nativeAddFn.Extent.Text -match 'FolderBrowserDialog' -and $nativeAddFn.Extent.Text -match 'Add-ScanFolderPath' -and $src -match "TileAdd'\)\.Add_Click\(\{ Show-NativeAddFolderDialog \}" -and $src -match "BtnAddTop'\)\.Add_Click\(\{ Show-NativeAddFolderDialog \}") `
   'add folder buttons use native Windows folder picker'
 Assert ($addSimpleFn -and $addSimpleFn.Extent.Text -match 'XamlReader' -and $addSimpleFn.Extent.Text -match 'FindName' -and $addSimpleFn.Extent.Text -match 'Add-ScanFolderPaths' -and $addSimpleFn.Extent.Text -match 'mapped/network' -and $addSimpleFn.Extent.Text -match 'TextBox' -and $addSimpleFn.Extent.Text -match 'ComboBox' -and $addSimpleFn.Extent.Text -match 'ListBox' -and $addSimpleFn.Extent.Text -match 'Open Path' -and $addSimpleFn.Extent.Text -match 'Add All Mapped' -and $addSimpleFn.Extent.Text -match 'NoNamePrompt' -and $addSimpleFn.Extent.Text -notmatch 'InputBox' -and $addSimpleFn.Extent.Text -notmatch 'YesNoCancel') `
   'simple add folder dialog loads WPF browser from XAML and avoids overloaded prompts'
@@ -113,7 +113,7 @@ Assert ($safePickerFn -and $safePickerFn.Extent.Text -match 'DriveInfo' -and $sa
   'legacy safe folder browser remains available as fallback'
 
 # ---- 4. extract pure functions from the AST ----
-foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry')) {
+foreach ($fnName in @('Get-HitPaths','Get-VtStatusCode','ConvertFrom-ClamBatchLog','Find-MovedCacheEntry','Test-IsExecFile')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
   if (-not $f) { Assert $false "function $fnName found"; exit 1 }
   . ([scriptblock]::Create($f.Extent.Text))
@@ -180,6 +180,31 @@ Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'D:\Scanned\Empty'
   'moved cache: empty-folder signature never matches (collides by design)'
 Assert ($null -eq (Find-MovedCacheEntry -Cache $mvCache -Unit 'C:\Downloads\PackageX' -Sig 'D|120|987654|638600000000000000')) `
   'moved cache: the unit itself is not its own move source'
+
+# ---- 6c. Quick scan (-QuickScan): Defender-only sweep of .exe/.dll ----
+Assert ($src -match '\[switch\]\$QuickScan') '-QuickScan switch parameter declared'
+$qext = [regex]::Match($src, '(?m)^\s*\$QuickScanExt\s*=\s*@\(([^\)]*)\)')
+Assert ($qext.Success -and $qext.Groups[1].Value -match "'\.exe'" -and $qext.Groups[1].Value -match "'\.dll'") `
+  'QuickScanExt covers .exe and .dll'
+# extension classifier is case-insensitive and extension-only (no disk access)
+Assert ((Test-IsExecFile 'C:\a\b\App.EXE' @('.exe','.dll')) -and (Test-IsExecFile 'x\core.dll' @('.exe','.dll'))) `
+  'Test-IsExecFile matches exe/dll regardless of case'
+Assert ((-not (Test-IsExecFile 'readme.txt' @('.exe','.dll'))) -and (-not (Test-IsExecFile 'noext' @('.exe','.dll'))) -and (-not (Test-IsExecFile '' @('.exe','.dll')))) `
+  'Test-IsExecFile rejects non-executables, extensionless and empty paths'
+# main flow: -QuickScan forces Defender only, expands targets to exec units, needs MpCmdRun
+Assert ($src -match '(?s)if \(\$QuickScan\) \{.*?\$engines = @\(''defender''\)') `
+  'QuickScan overrides engine selection to Defender only'
+Assert ($src -match 'Quick scan needs Microsoft Defender') `
+  'QuickScan reports a clear error when Defender is missing'
+Assert ($src -match '(?s)if \(\$QuickScan\) \{\s*foreach \(\$t in \$targets\) \{ \$units \+= Expand-QuickScanUnits \$t \}') `
+  'QuickScan expands targets into per-exe/dll units'
+$expandQuickFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -eq 'Expand-QuickScanUnits' -or $n.Name -eq 'script:Expand-QuickScanUnits') }, $true) | Select-Object -First 1
+Assert ($expandQuickFn -and $expandQuickFn.Extent.Text -match 'Test-IsExecFile' -and $expandQuickFn.Extent.Text -match 'Test-Excluded' -and $expandQuickFn.Extent.Text -match 'Recurse') `
+  'Expand-QuickScanUnits recurses for exec files and honours exclusions'
+# GUI: Quick Scan tile passes -QuickScan and offers full/incremental choice
+Assert ($src -match "\`$quickScan = \{" -and $src -match "'-QuickScan'" -and $src -match '-QuickScan -Path ') `
+  'GUI Quick Scan action runs -QuickScan on all or checked items'
+Assert ($src -match "TileQuickScan'\)\.Add_Click\(\`$quickScan\)") 'Quick Scan tile is wired to the quick scan action'
 
 # ---- 7. Get-VtStatusCode message fallback ----
 try { throw 'The remote server returned an error: (404) Not Found.' } catch { $e = $_ }
