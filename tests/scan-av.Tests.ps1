@@ -46,7 +46,7 @@ try {
   $x = [xml]$m.Groups[1].Value
   $names = @($x.SelectNodes('//*') | ForEach-Object { $_.Attributes } | ForEach-Object { $_ } |
              Where-Object { $_ -and $_.LocalName -eq 'Name' } | ForEach-Object { $_.Value })
-  foreach ($need in 'BtnAddTop','BtnRefresh','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel','TileQuickScan') {
+  foreach ($need in 'BtnAddTop','BtnRefresh','BtnUpdate','BtnExit','SetVtUpload','SetVtKey','SetTimeout','RunResults','RunResultsWrap','HeaderProgress','AddFolderPanel','AddFolderPath','AddFolderRoots','AddFolderList','AddFolderOpen','AddFolderUp','AddFolderRefresh','AddFolderAddAll','AddFolderAdd','AddFolderCancel','TileQuickScan','BtnNoPromptSetup') {
     Assert ($names -contains $need) "XAML control $need present"
   }
   Assert ($names -notcontains 'BtnTray') 'XAML control BtnTray removed'
@@ -216,6 +216,20 @@ Assert ($src -match '(?s)foreach \(\$u in \$toScan\).*?if \(\$cacheDirty -and.*?
   'pass-2 checkpoints the cache mid-run so an interrupted scan keeps what it already scanned'
 Assert ($src -match '(?s)foreach \(\$u in \$toScan\).*?\$cache\[\$u\] = @\{ sig = \$sig;.*?\$cacheDirty = \$true') `
   'a clean result marks the cache dirty for the next checkpoint'
+
+# ---- 6e. No-prompt elevation: run the app elevated via a scheduled task ----
+Assert ($src -match '\[switch\]\$NoPromptGuiShortcut') '-NoPromptGuiShortcut switch parameter declared'
+Assert ($src -match 'if \(\$NoPromptGuiShortcut\) \{ Register-NoPromptGuiTask; return \}') `
+  'NoPromptGuiShortcut dispatches to Register-NoPromptGuiTask'
+$noPromptGuiFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Register-NoPromptGuiTask' }, $true) | Select-Object -First 1
+Assert ($noPromptGuiFn -and $noPromptGuiFn.Extent.Text -match 'RunLevel Highest' -and $noPromptGuiFn.Extent.Text -match 'Register-ScheduledTask' -and $noPromptGuiFn.Extent.Text -match "ScanAV-Gui" -and $noPromptGuiFn.Extent.Text -match 'Ensure-StandaloneLauncher') `
+  'no-prompt task runs the app launcher elevated (RunLevel Highest)'
+Assert ($noPromptGuiFn -and $noPromptGuiFn.Extent.Text -match 'Test-IsAdmin' -and $noPromptGuiFn.Extent.Text -match 'Invoke-RelaunchElevated') `
+  'no-prompt setup self-elevates once to register the task'
+Assert ($noPromptGuiFn -and $noPromptGuiFn.Extent.Text -match "No Prompt.*\.lnk|Scan-AV \(No Prompt\)" -and $noPromptGuiFn.Extent.Text -match 'schtasks.exe' -and $noPromptGuiFn.Extent.Text -match '/run /tn ScanAV-Gui') `
+  'no-prompt setup creates a separate shortcut that triggers the task'
+Assert ($src -match "BtnNoPromptSetup'\)\.Add_Click" -and $src -match 'Register-NoPromptGuiTask') `
+  'Settings button is wired to the no-prompt setup'
 
 # ---- 7. Get-VtStatusCode message fallback ----
 try { throw 'The remote server returned an error: (404) Not Found.' } catch { $e = $_ }
