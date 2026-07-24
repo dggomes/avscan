@@ -155,15 +155,19 @@ function Find-Tool {
 # there; fall back to the static system copy.
 function Find-Defender {
   $cands = @()
-  $plat = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
-  if (Test-Path $plat) {
-    $newest = Get-ChildItem -Path $plat -Directory -ErrorAction SilentlyContinue |
-              Sort-Object Name -Descending |
-              ForEach-Object { Join-Path $_.FullName 'MpCmdRun.exe' } |
-              Where-Object { Test-Path $_ } | Select-Object -First 1
-    if ($newest) { $cands += $newest }
+  # $env:ProgramData/$env:ProgramFiles are unset off-Windows (and Join-Path throws on
+  # a null base) - guard both so this degrades to "not found" instead of erroring.
+  if ($env:ProgramData) {
+    $plat = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
+    if (Test-Path $plat) {
+      $newest = Get-ChildItem -Path $plat -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'MpCmdRun.exe' } |
+                Where-Object { Test-Path $_ } | Select-Object -First 1
+      if ($newest) { $cands += $newest }
+    }
   }
-  $cands += "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+  if ($env:ProgramFiles) { $cands += (Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe') }
   foreach ($c in $cands) { if ($c -and (Test-Path $c)) { return $c } }
   return $null
 }
