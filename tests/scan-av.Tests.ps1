@@ -206,6 +206,17 @@ Assert ($src -match "\`$quickScan = \{" -and $src -match "'-QuickScan'" -and $sr
   'GUI Quick Scan action runs -QuickScan on all or checked items'
 Assert ($src -match "TileQuickScan'\)\.Add_Click\(\`$quickScan\)") 'Quick Scan tile is wired to the quick scan action'
 
+# ---- 6d. Incremental cache checkpointing: keep progress if a long run is cut short ----
+$saveCacheFn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Save-Cache' }, $true) | Select-Object -First 1
+Assert ($saveCacheFn -and $saveCacheFn.Extent.Text -match '\.tmp' -and $saveCacheFn.Extent.Text -match 'Move-Item' -and $saveCacheFn.Extent.Text -match '-Force') `
+  'Save-Cache writes atomically (temp file + move) so a kill mid-write cannot corrupt the cache'
+Assert ($src -match 'cacheFlushSeconds') 'cache checkpoint interval is configurable via options.cacheFlushSeconds'
+# pass-2 flushes the cache during the loop, throttled by the flush interval
+Assert ($src -match '(?s)foreach \(\$u in \$toScan\).*?if \(\$cacheDirty -and.*?TotalSeconds -ge \$cacheFlushSec.*?Save-Cache -Cache \$cache; \$lastFlushUtc') `
+  'pass-2 checkpoints the cache mid-run so an interrupted scan keeps what it already scanned'
+Assert ($src -match '(?s)foreach \(\$u in \$toScan\).*?\$cache\[\$u\] = @\{ sig = \$sig;.*?\$cacheDirty = \$true') `
+  'a clean result marks the cache dirty for the next checkpoint'
+
 # ---- 7. Get-VtStatusCode message fallback ----
 try { throw 'The remote server returned an error: (404) Not Found.' } catch { $e = $_ }
 Assert ((Get-VtStatusCode $e) -eq 404) 'Get-VtStatusCode message fallback -> 404'
